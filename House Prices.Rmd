@@ -1,0 +1,3013 @@
+---
+title: "Entrega grupal II"
+description: |
+  Aplicando regresión univariante, modelo saturado, regresión con selección de modelos y KNN y árbol en modo regresión a house_prices.csv
+author:
+  - name: Iván González, Qiqi Zhou y Felipe Reyes
+    affiliation: Universidad Complutense de Madrid
+    affiliation_url: https://ucm.es
+date: "`r Sys.Date()`"
+output:
+    distill::distill_article:
+        highlight: kate
+        colorlinks: true
+        code_folding: false
+        toc: true            
+        toc_depth: 3     
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include = FALSE}
+# Ajuste comunes de los chunk
+knitr::opts_chunk$set(message = FALSE, warning = FALSE,
+                      echo = TRUE, res = 400)
+```
+
+# Objetivo
+
+El objetivo de esta práctica es **predecir** la variable **continua** `SalePrice` a través de distintos métodos de **regresión** y de **algoritmos** en modo **regresión**.
+
+# Paquetes necesarios
+
+Necesitaremos los siguientes paquetes:
+
+```{r paquetes}
+# Borramos
+rm(list = ls())
+
+# Paquetes
+library(skimr) # Resumen numérico
+library(tidymodels) # Depuración datos
+library(tidyverse) # Modelos
+library(outliers) # Outliers
+library(themis) # Sobremuestreo
+library(parallel) # Fase de validación
+library(doParallel) # Fase de validación
+library(rpart.plot) # Visualización de árboles
+library(performance)
+library(ggthemes)
+library(glue)
+library(vip)
+library(ggrepel)
+library(Rmisc)
+```
+
+# Datos
+
+Los datos que usaremos provienen de los dataset **house_prices_train.csv** y **house_prices_test.csv**.
+Para el análisis exploratorio, **bindearemos** ambos dataset para poder analizar el **total de las observaciones**.
+
+```{r}
+# Cargamos ambas particiones
+house_train <- read_csv(file = "/Users/leztin/Desktop/DATOS/house_prices_train.csv")
+house_test <- read_csv(file = "/Users/leztin/Desktop/DATOS/house_prices_test.csv")
+
+# Creamos en test una columna con la variable objetivo `SalePrice`
+house_test$SalePrice <- NA
+
+# Bindeamos las particiones en un archivo completo
+house_complete <- rbind(house_train, house_test)
+```
+
+# Análisis exploratorio inicial (numérico)
+
+Antes de tomar cualquier decisión con los datos, lo primero que haremos será **echar un vistazo numérico** a cómo se comportan las variables.
+Dado que dos de los métodos que vamos a utilizar para **predecir** son el **árbol** y el **KNN** en modo **regresión**, comprobaremos **cómo se relacionan** nuestras **predictoras cuantitativas y cualitativas** de cara a la creación de la receta y con tal de poder **recategorizarlas**.
+
+### Variables
+
+Lo primero es conocer nuestras variables.
+
+```{r}
+glimpse(house_complete)
+```
+
+|    Variable    |                                  Significado                                   |    Variable     |                               Significado                               |
+|:-----------:|:-----------------------:|:-----------:|:--------------------:|
+|  `SalePrice`   |         precio de venta de la propiedad en dólares (variable objetivo)         |    `Heating`    |                           tipo de calefacción                           |
+|  `MSSubClass`  |                             clase de construcción                              |   `HeatingQC`   |                  calidad y condición de la calefacción                  |
+|   `MSZoning`   |                     clasificación general de zonificación                      |  `CentralAir`   |                       aire acondicionado central                        |
+| `LotFrontage`  |                pies lineales de calle conectados a la propiedad                |  `Electrical`   |                            sistema eléctrico                            |
+|   `LotArea`    |                    tamaño de la propiedad en pies cuadrados                    |   `1stFlrSF`    |                     pies cuadrados del primer piso                      |
+|    `Street`    |                         tipo de acceso a la carretera                          |   `2ndFlrSF`    |                     pies cuadrados del segundo piso                     |
+|    `Alley`     |                           tipo de acceso al callejón                           | `LowQualFinSF`  |       pies cuadrados terminados de baja calidad (todos los pisos)       |
+|   `LotShape`   |                         forma general de la propiedad                          |   `GrLivArea`   | pies cuadrados de superficie habitable sobre el nivel del suelo (suelo) |
+| `LandContour`  |                            planitud de la propiedad                            | `BsmtFullBath`  |                       baños completos del sótano                        |
+|  `Utilities`   |                        tipos de utilidades disponibles                         | `BsmtHalfBath`  |                         medios baños del sótano                         |
+|  `LotConfig`   |                        configuración de las propiedades                        |   `FullBath`    |                baños completos sobre el nivel del suelo                 |
+|  `LandSlope`   |                           pendiente de la propiedad                            |   `HalfBath`    |                  medios baños sobre el nivel del suelo                  |
+| `Neighborhood` |         ubicaciones físicas dentro de los límites de la ciudad de Ames         |    `Bedroom`    |          número de dormitorios por encima del nivel del sótano          |
+|  `Condition1`  |                 proximidad a carretera principal o vía férrea                  | `GarageFinish`  |                       acabado interior del garaje                       |
+|  `Condition2`  | proximidad a la carretera principal o vía férrea (si hay una segunda presente) |  `GarageCars`   |              tamaño del garaje en capacidad de automóviles              |
+|   `BldgType`   |                                tipo de vivienda                                |  `GarageArea`   |                   tamaño del garaje en pies cuadrados                   |
+|  `HouseStyle`  |                               estilo de vivienda                               |  `GarageQual`   |                            calidad de garaje                            |
+| `OverallQual`  |                   calidad general del material y del acabado                   |  `GarageCond`   |                            estado del garaje                            |
+| `OverallCond`  |                   calificación de las condiciones generales                    |  `PavedDrive`   |                           entrada pavimentada                           |
+|  `YearBuilt`   |                         fecha de construcción original                         |  `WoodDeckSF`   |             área de la cubierta de madera en pies cuadrados             |
+| `YearRemodAdd` |                             fecha de remodelación                              |  `OpenPorchSF`  |                área de porche abierto en pies cuadrados                 |
+|  `RoofStyle`   |                                 tipo de techo                                  | `EnclosedPorch` |                área de porche cerrado en pies cuadrados                 |
+|   `RoofMatl`   |                               material del techo                               |   `3SsnPorch`   |           área de porche de tres estaciones en pies cuadrados           |
+| `Exterior1st`  |                       revestimiento exterior de la casa                        |  `ScreenPorch`  |              área de porche de pantalla en pies cuadrados               |
+| `Exterior2nd`  |         revestimiento exterior de la casa (si hay más de un material)          |   `PoolArea`    |                  área de la piscina en pies cuadrados                   |
+|  `MasVnrType`  |                          tipo de chapa de mampostería                          |    `PoolQC`     |                          calidad de la piscina                          |
+|  `MasVnrArea`  |             área de revestimiento de mampostería en pies cuadrados             |     `Fence`     |                           calidad de la cerca                           |
+|  `ExterQual`   |                         calidad del material exterior                          |  `MiscFeature`  |               miscelánea no incluida en otras categorías                |
+|  `ExterCond`   |                   estado actual del material en el exterior                    |    `MiscVal`    |                      miscelánea referente al valor                      |
+|  `Foundation`  |                              tipo de cimentación                               |    `MoSold`     |                              mes de venta                               |
+|   `BsmtQual`   |                               altura del sótano                                |    `YrSold`     |                              año de venta                               |
+|   `BsmtCond`   |                           estado general del sótano                            |   `SaleType`    |                              tipo de venta                              |
+| `BsmtExposure` |            paredes de los sótanos a nivel del jardín o de la salida            | `SaleCondition` |                          condiciones de venta                           |
+| `BsmtFinType1` |                     calidad del área terminada del sótano                      |    `Kitchen`    |                            número de cocinas                            |
+|  `BsmtFinSF1`  |                       tipo 1: pies cuadrados terminados                        |  `KitchenQual`  |                          calidad de la cocina                           |
+| `BsmtFinType2` |            calidad de la segunda área terminada (si está presente)             | `TotRmsAbvGrd`  |         total de habitaciones sobre rasante (no incluye baños)          |
+|  `BsmtFinSF2`  |                       tipo 2: pies cuadrados terminados                        |  `Functional`   |               calificación de la funcionalidad del hogar                |
+|  `BsmtUnfSF`   |                pies cuadrados sin terminar del área del sótano                 |  `Fireplaces`   |                           número de chimeneas                           |
+| `TotalBsmtSF`  |                   pies cuadrados totales del área del sótano                   |  `FireplaceQu`  |                           calidad de chimenea                           |
+|  `GarageType`  |                              ubicación del garaje                              |  `GarageYrBlt`  |                    año en que se construyó el garaje                    |
+
+### Distribución de la variable objetivo
+
+El objetivo será **predecir el precio de una vivienda en función de sus características**, por lo que `SalesPrice` será nuestra **variable objetivo**.
+En primer lugar comprobaremos cómo se **distribuyen los valores de la objetivo**.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+# Objetivo: predecir el precio de una vivienda en función de sus características
+house_complete |> 
+  ggplot(aes(x = SalePrice)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución del precio de las viviendas", x = "Precio", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+```
+
+En este caso, como la distribución parece bastante asimétrica, la **mediana** será la medida **más representativa**. Esta se encuentra en torno a los **160 000 dólares** por vivienda.
+
+# Fase 2: Exploración de los datos
+
+## Problemas de codificación
+
+Tras esta pequeña aproximación al dataset, comienza la **primera fase** de la metodología SEMMA para el depurado de nuestros datos. En este primer apartado observaremos a *grosso modo* si existen problemas de **codificación** en el dataset. 
+Lo que más llama la atención con respecto a la codificación de las modalidades de ciertas variables es el **gran número de ausentes que presenta el dataset**. 
+
+```{r}
+ausentes <- 
+  apply(house_complete, 2, function(x) sum(is.na(x)))
+
+ausentes_tb <- 
+  tibble(Variable = names(house_complete), Ausentes = ausentes) |> 
+  filter(Ausentes > 0)
+ausentes_tb
+
+ausentes_tb |> 
+  filter(Ausentes > 10) |> 
+  ggplot(aes(x = Variable, y = Ausentes)) +
+  geom_col(position = "dodge", fill="#EB9891", color = "black") +
+  labs(title = "> 10 valores ausentes por variable", x = "Variable", 
+       y = "Cantidad de valores ausentes") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 9), plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_text(vjust=-0.5), axis.title.y = element_text(vjust=2)) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2))
+```
+
+Como se puede observar, **20** del total de variables presenta **algún dato ausente**. La **mitad** de esos 20 presenta **más de 10 ausentes** entre sus categorías. Ante esta cantidad de valores vacíos, debemos consultar primero si se tratan de **categorías reales mal codificadas** o **ausentes reales**.
+Según el **documento explicativo**, las variables `Alley`, `BsmtQual`, `BsmtCond`, `FireplaceQu`, `GarageQual`, `PoolQC` y `Fence` tienen codificadas como valores ausentes categorías **que realmente no lo son**. Vamos a modificar esta cuestión.
+
+```{r}
+house <-
+  house_complete |> 
+  mutate(Alley = 
+           ifelse(is.na(Alley), "None", Alley)) |>
+  mutate(BsmtQual = 
+           ifelse(is.na(BsmtQual), "None", BsmtQual)) |> 
+  mutate(BsmtCond = 
+           ifelse(is.na(BsmtCond), "None", BsmtCond)) |>
+  mutate(FireplaceQu = 
+           ifelse(is.na(FireplaceQu), "None", FireplaceQu)) |> 
+  mutate(GarageQual = 
+           ifelse(is.na(GarageQual), "None", GarageQual)) |>
+  mutate(PoolQC = 
+           ifelse(is.na(PoolQC), "None", PoolQC)) |>
+  mutate(Fence = 
+           ifelse(is.na(Fence), "None", Fence))
+
+ausentes <- 
+  apply(house, 2, function(x) sum(is.na(x)))
+
+ausentes_tb <- 
+  tibble(Variable = names(house), Ausentes = ausentes) |> 
+  filter(Ausentes > 0)
+ausentes_tb
+```
+
+Ahora sí se ha reducido el número de variables con ausentes **de 20 a 13**. Al resto, le **imputaremos** lo que le corresponda (media, moda o mediana) en la fase pertinente.
+
+## Variables tipo texto, variables numéricas y factores
+
+Tras ello, comprobaremos que todas las variables estén codificadas en su **tipología correcta**: debemos decidir si las variables de tipo texto son realmente **variables cualitativas** (factores).
+
+```{r}
+house_complete |>  
+  select(where(is.character)) |>
+  glimpse()
+```
+
+En el dataset encontramos varias variables **divididas en modalidades** del tipo `Ex` (excelente)  \> `Gd` (bueno) \> `TA` (normal) \> `Fa` (regular) \> `Po` (pésimo). En concreto, se tratan de las variables `ExterCond`, `BsmtQual`, `BsmtCond`, `HeatingQC`, `KitchenQual`, `FireplaceQu`, `GarageQual` y `PoolQC`. Para ampliar el **análisis de correlaciones** posterior para con nuestra variable objetivo, lo que haremos será transformar todas estas variables cualitativas en **ordinales**. Como la mayoría sigue la **misma estructura**, crearemos un vector que asigne a cada modalidad un **número del 0 al 5**, siendo 0 igual a nada, y siendo 5 igual a excelente:
+
+```{r}
+quality <- 
+  c("None" = 0, "Po" = 1, "Fa" = 2, "TA" = 3, "Gd" = 4, "Ex" = 5)
+```
+
+Aplicamos el vector con `revalue()` a cada una de las variables:
+
+```{r}
+house$ExterCond <-
+  as.integer(revalue(house$ExterCond, quality))
+house$BsmtQual <-
+  as.integer(revalue(house$BsmtQual, quality))
+house$BsmtCond <-
+  as.integer(revalue(house$BsmtCond, quality))
+house$HeatingQC <-
+  as.integer(revalue(house$HeatingQC, quality))
+house$KitchenQual <-
+  as.integer(revalue(house$KitchenQual, quality))
+house$FireplaceQu <-
+  as.integer(revalue(house$FireplaceQu, quality))
+house$GarageQual <-
+  as.integer(revalue(house$GarageQual, quality))
+house$PoolQC <-
+  as.integer(revalue(house$PoolQC, quality))
+```
+
+Para el resto de **variables no ordinales** las convertimos a **factor**.
+
+```{r}
+house <-
+  house |> 
+  mutate_if(~!is.numeric(.), as.factor)
+```
+
+Daremos un repaso también a las **numéricas**.
+
+```{r}
+house_complete |>  
+  select(where(is.numeric)) |>
+  glimpse()
+```
+
+Nos llama la atención la variable `MSSubClass`, que identifica el tipo de vivienda objeto de venta. Aunque este codificada como numérica, realmente se trata de una variable cualitativa, por lo que vamos a convertirla.
+
+```{r}
+class <- 
+  c("20" = "1 story 1946+", "30" = "1 story 1945-", 
+    "40" = "1 story fin attic", "45" = "1,5 story unf", 
+    "50" = "1,5 story fin", "60" = "2 story 1946+", 
+    "70" = "2 story 1945-", "75" = "2,5 story all ages", 
+    "80" = "split/multi level", "85" = "split foyer", 
+    "90" = "duplex all style/age", "120" = "1 story PUD 1946+", 
+    "150" = "1,5 story PUD all", "160" = "2 story PUD 1946+", 
+    "180" = "PUD multilevel", "190" = "2 family conversion")
+
+house$MSSubClass <-
+  as.factor(house$MSSubClass)
+house$MSSubClass <-
+  revalue(house$MSSubClass, class)
+```
+
+Ahora sí, **todas** las variables **cualitativas** y **cuantitativas** están bien codificadas.
+
+## Variables cuantitativas {.tabset}
+
+Una vez asignado a cada variable su **tipología** correspondiente, pasaremos a analizar las **variables cuantitativas** del dataset. Se analizará ante todo cómo **afecta** cada variable a nuestra **variable objetivo** (`SalePrice`). Este análisis servirá, ante todo, para **recategorizar las predictoras numéricas** a la hora de crear la receta para el árbol en modo regresión.
+
+### Colinealidad
+
+Antes de nada, al tener que analizar un dataset con tantas variables, comprobaremos los posibles **problemas de colinealidad** entre las predictoras numéricas con tal de **eliminar** las que repitan información. También, al tener una **variable continua** como objetivo, comprobaremos cuáles de las numéricas tienen una **mayor correlación con ella** con tal de **mantenerlas** y **analizarlas en profundidad**.
+
+```{r}
+library(corrr)
+cor_matrix <- 
+  house |> select(where(is.numeric)) |> cor(use = "pairwise.complete.obs", method = "pearson")
+```
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+library(corrplot)
+cor_matrix |>
+  corrplot(method = "number", tl.cex = 0.55, number.cex = 0.7, type = "lower")
+```
+
+Como se puede observar, existen bastantes variables con **correlaciones superiores a 0.49**. Vamos a echarles un vistazo:
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+# Seleccionar solo las entradas de la matriz de correlación con valores mayores a 0.49
+filtered_matrix <- abs(cor_matrix)
+filtered_matrix[cor_matrix <= 0.49] <- NA
+
+# Creamos el gráfico de correlación
+corrplot(filtered_matrix, method = "number", type = "lower",tl.cex = 0.55, number.cex = 0.7, na.label=" ")
+```
+
+En primer lugar, a partir del gráfico podemos observar como las variables `YearsBuilt`, `YearRemodAdd`, `BsmtQual`, `TotalBsmtSF`, `1stFlrSF`, `GrLivArea`, `FullBath`, `KitchenQual`, `TotRmsAbvGrd`, `FireplaceQu` `GarageCars` y `GarageArea` son las que mantienen **correlaciones más fuertes** (superiores a 0.5 en valor absoluto) con nuestra **variable objetivo** `SalePrice`. Podríamos añadir también las variables `Fireplaces` y `GarageYrBlt` ya que mantienen correlaciones de **0.47** y **0.49**, respectivamente. 
+
+En segundo lugar, analizaremos las **correlaciones** entre las propias predictoras con tal de **deshacernos de información redundante**. Nos desharemos de aquellas variables que mantengan correlaciones superiores a 0.7 con otras variables. De un par de variables muy correlacionadas, eliminaremos la que menor correlación mantenga con nuestra objetivo (`SalePrice`).
+
+-   La variable `YearsBuilt` mantiene una correlación de **0.83** con `GarageYrBlt`. Ante este par, eliminaremos `GarageYrBlt`.
+-   La variable `TotalBsmtSF` mantiene una correlación de **0.8** con `1stFlrSF`. Ante este par, eliminaremos `TotalBsmtSF`.
+-   La variable `GrLivArea` mantiene una correlación de **0.81** con `TotRmsAbvGrd`. Ante este par, eliminaremos `TotRmsAbvGrd`.
+-   La variable `Fireplaces` mantiene una correlación de **0.86** con `FireplaceQu`. Ante este par, eliminaremos `Fireplaces`.
+-   La variable `GarageCars` mantiene una correlación de **0.89** con `GarageArea`. Ante este par, eliminaremos `GarageArea`.
+-   La variable `PoolArea` mantiene una correlación de **0.79** con `PoolQC`. Ante este par, eliminaremos `PoolArea`.
+
+```{r}
+house <- 
+  house |> 
+  select(-c(GarageYrBlt, TotalBsmtSF, TotRmsAbvGrd, Fireplaces, GarageArea, PoolArea))
+
+house |> 
+  select(where(is.numeric)) |> 
+  glimpse()
+```
+
+### Variable Id
+
+```{r}
+house |> 
+  summarise(min_lead = min(Id), max_lead = max(Id))
+```
+
+Como se puede observar, la variable `Id` es un **id del número de viviendas** que se incluyen en el dataset. Como **no tiene interés** alguno a fin de predecir nuestra variable objetivo, en la fase de modificación **eliminaremos** esta variable. La recuperaremos únicamente para cuando llegue el momento de subir las predicciones a Kaggle.
+
+### Variables relacionadas con medidas de áreas de la vivienda
+
+```{r}
+sum1 <- house |> 
+  summarise(Variable = "GrLivArea", min_lead = min(GrLivArea), max_lead = max(GrLivArea))
+
+sum2 <- house |> 
+  summarise(Variable = "`1stFlrSF`", min_lead = min(`1stFlrSF`), max_lead = max(`1stFlrSF`))
+
+sum3 <- house |> 
+  summarise(Variable = "`2ndFlrSF`", min_lead = min(`2ndFlrSF`), max_lead = max(`2ndFlrSF`))
+
+sum4 <- house |> 
+  summarise(Variable = "LotArea", min_lead = min(LotArea), max_lead = max(LotArea))
+
+sum5 <- house |> 
+  drop_na(LotFrontage) |> 
+  summarise(Variable = "LotFrontage", min_lead = min(LotFrontage), max_lead = max(LotFrontage))
+
+sum6 <- house |> 
+  summarise(Variable = "OpenPorchSF", min_lead = min (OpenPorchSF), max_lead = max(OpenPorchSF))
+
+rbind(sum1, sum2, sum3, sum4, sum5, sum6)
+```
+
+Las seis variables miden áreas de ciertas **zonas de la vivienda**. Las variables `2ndFlrSF` y `OpenPorchSF` toman el **valor 0** cuando la vivienda no tiene **segunda planta** o **porche**. Graficaremos a continuación las seis variables para comprobar como se distribuyen en función de nuestra objetivo `SalePrice`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+a1 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = GrLivArea, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_text_repel(aes(label = ifelse(house$GrLivArea[!is.na(house$SalePrice)] > 4500, 
+                                     rownames(house), ""))) +
+  theme_minimal()
+
+a2 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = `1stFlrSF`, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_text_repel(aes(label = ifelse(house$`1stFlrSF`[!is.na(house$SalePrice)] > 4500, 
+                                     rownames(house), ""))) +
+  theme_minimal()
+
+a3 <- house[!is.na(house$SalePrice), ] |> 
+  filter(`2ndFlrSF` > 0) |> 
+  ggplot(aes(x = `2ndFlrSF`, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+a4 <- house[!is.na(house$SalePrice), ] |> 
+  filter(LotArea < 100000) |> 
+  ggplot(aes(x = LotArea, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+a5 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = LotFrontage, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_text_repel(aes(label = ifelse(house$LotFrontage[!is.na(house$SalePrice)] > 250, 
+                                     rownames(house), ""))) +
+  theme_minimal()
+
+a6 <- house[!is.na(house$SalePrice), ] |> 
+  filter(OpenPorchSF > 0) |> 
+  ggplot(aes(x = OpenPorchSF, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+multiplot(a1, a2, a3, a4, a5, a6, cols = 2)
+```
+
+
+Como se puede observar, no todas las variables evolucionan de la misma manera al relacionarlas con la variable `SalePrice`. 
+
+-   Para las variables `GrLivArea`, `1stFlrSF` y `2ndFlrSF` la correlación es muy directa: como es evidente, a más superficie habitable haya en la vivienda, mayor será su precio. De hecho, la variable `GrLivArea` parece ser resultado de la suma de las variables `1stFlrSF` y `2ndFlrSF`, que medían la superficie habitable de la vivienda en el segundo y el segundo piso (si hubiere). Para poder graficar correctamente la variable `2ndFlrSF`, se han filtrado los valores iguales a 0 (lo que era equivalente a no tener segundo piso).
+
+-   Para las variables `LotArea` y `LotFrontage` la relación también es directa, pero la evolución no es tan clara como en las anteriores variables. Es evidente que sigue siendo positiva porque ambas variables miden la superficie habitable y construida de la vivienda.
+
+-   Por su parte, la variable `OpenPorchSF` no parece tener una influencia demasiado significativa sobre nuestra variable objetivo. A medida que el porche aumenta en pies cuadrados, el precio general de la vivienda no parece variar en exceso.
+
+Como ya tratamos los ausentes de estas variables (a excepción de `LotFrontage`, a los que probablemente imputemos la mediana o la eliminemos por su elevado número de ausentes), dejaremos estas seis variables tal y como están, a excepción de `OpenPorchSF`, la cual seguramente eliminemos.
+
+### Variables relacionadas con calidades y condiciones de la vivienda
+
+```{r}
+sum1 <- house |> 
+  summarise(Variable = "OverallCond", min_lead = min(OverallCond), max_lead = max(OverallCond))
+
+sum2 <- house |> 
+  summarise(Variable = "ExterCond", min_lead = min(ExterCond), max_lead = max(ExterCond))
+
+sum3 <- house |> 
+  summarise(Variable = "BsmtQual", min_lead = min(BsmtQual), max_lead = max(BsmtQual))
+
+sum4 <- house |> 
+  summarise(Variable = "BsmtCond", min_lead = min(BsmtCond), max_lead = max(BsmtCond))
+
+sum5 <- house |> 
+  drop_na(KitchenQual) |> 
+  summarise(Variable = "KitchenQual", min_lead = min(KitchenQual), max_lead = max(KitchenQual))
+
+sum6 <- house |> 
+  summarise(Variable = "GarageQual", min_lead = min(GarageQual), max_lead = max(GarageQual))
+
+sum7 <- house |> 
+  summarise(Variable = "FireplaceQu", min_lead = min(FireplaceQu), max_lead = max(FireplaceQu))
+
+sum8 <- house |> 
+  summarise(Variable = "PoolQC", min_lead = min(PoolQC), max_lead = max(PoolQC))
+
+sum9 <- house |> 
+  summarise(Variable = "HeatingQC", min_lead = min(HeatingQC), max_lead = max(HeatingQC))
+
+rbind(sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8, sum9)
+```
+
+Las nueve variables miden las condiciones y calidades de ciertas **zonas de la vivienda**. Las variables `BsmtQual`, `GarageQual`, `FireplaceQu` y `PoolQC` toman el **valor 0** cuando la vivienda **no dispone de esas áreas**. Graficaremos a continuación las nueve variables para comprobar como se distribuyen en función de nuestra objetivo `SalePrice`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+c1 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(OverallCond), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Overall Condition") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c2 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(ExterCond), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Exterior Condition") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c3 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(BsmtQual), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Basement Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c4 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(BsmtCond), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Basement Condition") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c5 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(KitchenQual), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Kitchen Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c6 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(GarageQual), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Garage Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c7 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(FireplaceQu), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Fireplace Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by=100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c8 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(PoolQC), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Pool Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by=100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c9 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(HeatingQC), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Heating Quality") + 
+  scale_y_continuous(breaks= seq(0, 800000, by=100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+multiplot(c1, c2, c3, c4, c5, c6, c7, c8, c9, cols = 3)
+```
+
+*A priori*, podríamos pensar que a mayor calidad en las zonas de la vivienda, mayor será el precio de la misma, pero no con todas parece cumplirse esta afirmación. 
+
+-   Para las variables `BsmtQual`, `FireplaceQu` y `KitchenQual` la correlación es muy directa y la progresión parece ligeramente ascendente: en estas tres variables se observa cierta correlación con la variable objetivo. De hecho, del grupo de variables que miden las calidades y las condiciones de la vivienda, estas tres eran las que mayor grado de correlación mantenían con `SalePrice`, de **0.59**, **0.52** y **0.66**, respectivamente.
+
+-   Para las variables `OverallCond`, `ExterCond` y `GarageQual` la relación no parece tan evidente. En las tres parece que la relación comienza con una progresión ascendiente para las primeras categorías, pero llegados a un punto, esta se estanca. Para el caso de `OverallCond`, por ejemplo, mientras que las diferencias de precios respecto del rango 1 a 5 sí que parecen aumentar ligeramente, a partir del valor 5 la progresión se estanca e incluso disminuye para el resto de valores (6-10). Lo mismo ocurre para `ExterCond` con el valor 3, y a `GarageQual` con el 4. Además, estas modalidades presentan una gran cantidad de valores outliers.
+
+-   La variable `PoolQC` por sí sola no parece ser de mucho interés. La mayoría de valores se concentran en 0, indicando con ello que en la mayoría de viviendas no hay piscina que evaluar. Se considerará posteriormente la posibilidad de sustituir las variables relativas a piscinas por una binaria que recoja únicamente la información de si se tiene o no con categorías `Yes` y `No`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+b1 <- ggplot(house, aes(x = factor(OverallCond))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="OverallCond") +
+  theme_minimal()
+
+b2 <- ggplot(house, aes(x = factor(ExterCond))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="ExterCond") +
+  theme_minimal()
+
+b3 <- ggplot(house, aes(x = factor(BsmtQual))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="BsmtQual") +
+  theme_minimal()
+
+b4 <- ggplot(house, aes(x = factor(BsmtCond))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="BsmtCond") +
+  theme_minimal()
+
+b5 <- ggplot(house, aes(x = factor(KitchenQual))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="KitchenQual") +
+  theme_minimal()
+
+b6 <- ggplot(house, aes(x = factor(GarageQual))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="GarageQual") +
+  theme_minimal()
+
+b7 <- ggplot(house, aes(x = factor(FireplaceQu))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="FireplaceQu") +
+  theme_minimal()
+
+b8 <- ggplot(house, aes(x = factor(PoolQC))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="PoolQC") +
+  theme_minimal()
+
+b9 <- ggplot(house, aes(x = factor(HeatingQC))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="HeatingQC") +
+  theme_minimal()
+
+multiplot(b1, b2, b3, b4, b5, b6, b7, b8, b9, cols = 3)
+```
+
+Por otro lado, si se atiende a la representación de cada categoría sobre el total de registros, en las variables `GarageQual`, `BsmtCond` o `ExterCond` la mayor parte las gobiernan la modalidad `3`. Posteriormente, en la fase de la preparación de la receta, se podrían agrupar algunos de estos niveles con tal de romper la concentración de los datos o, por el contrario, eliminar directamente este tipo de variables.
+
+De momento, mantendremos todas las variables a excepción de `PoolQC`, que será sustituida por una binaria.
+
+### Variables relacionadas con la edad de la vivienda
+
+```{r}
+sum1 <- house |> 
+  summarise(Variable = "YearRemodAdd", min_lead = min(YearRemodAdd), max_lead = max(YearRemodAdd))
+
+sum2 <- house |> 
+  summarise(Variable = "YearBuilt", min_lead = min(YearBuilt), max_lead = max(YearBuilt))
+
+sum3 <- house |> 
+  summarise(Variable = "MoSold", min_lead = min(MoSold), max_lead = max(MoSold))
+
+sum4 <- house |> 
+  summarise(Variable = "YrSold", min_lead = min(YrSold), max_lead = max(YrSold))
+
+rbind(sum1, sum2, sum3, sum4)
+```
+
+Las cuatro variables miden **instantes temporales** (años o meses) sobre distintas cuestiones relacionadas con la **vida de la vivienda**. La variable `MoSold` toma **valores del 1 al 12** porque informa únicamente del mes del año en el que se vendió la vivienda. Graficaremos a continuación las cuatro variables para comprobar como se distribuyen en función de nuestra objetivo `SalePrice`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+t1 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = YearRemodAdd, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+t2 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = YearBuilt, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+t3 <- aggregate(SalePrice ~ YrSold, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$YrSold))) |> 
+  ggplot(aes(x = YrSold, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#EB9891") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 25000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  coord_cartesian(ylim = c(0, 200000)) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Year Sold",y = "Sale Price") +
+  theme_minimal()
+
+t4 <- aggregate(SalePrice ~ MoSold, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$MoSold))) |> 
+  ggplot(aes(x = MoSold, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#EB9891") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 800000, by = 25000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  coord_cartesian(ylim = c(0, 200000)) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Month Sold",y = "Sale Price") +
+  theme_minimal()
+
+multiplot(t1, t2, t3, t4, cols = 2)
+```
+
+Algunos comentarios a la vista de los gráficos:
+
+-   Para las variables `YearRemodAdd` y `YearBuilt` la correlación es claramente positiva: obviamente, a menos años pasen desde el momento de la reforma o construcción, mayor será el precio de venta de la vivienda. Además, a partir de estas dos variables podríamos construir otras que puedan aportar información también relevante a efectos de la modelización. Por un lado, la variable `YearBuilt` podría restarse con `YrSold` ($YrSold-YearBuilt$) para dar lugar a una nueva variable que ofrecería información acerca de la **edad de la vivienda**. Esta variable actuaría como **penalizador** a través de su correlación negativa con nuestra variable objetivo, pues a más edad, menor sería el precio de la vivienda. Además, la variable `YearRemodAdd`, al igual que como haremos con las variables relacionadas con las posibles piscinas de las viviendas, podría transformarse en **binaria** con las modalidades `Yes` y `No` y respondiendo a la pregunta de si se ha reformado o no en el tiempo.
+
+-   Para las variables `YrSold` y `MoSold` no parece darse demasiada variación entre categorías. Para `YrSold`, los efectos de la crisis financiera de 2007 sí que parecen hacerse notar, sobre todo en la ligera disminución del precio de las viviendas a partir de ese año.
+
+En resumen, con estas cuatro variables crearemos otras **dos nuevas** para, posteriormente, **eliminar** la variable `YearRemodAdd` original. Además, las variables `YrSold` y `MoSold` podrían funcionar también como cualitativas y factores.
+
+```{r}
+house$YrSold <-
+  as.factor(house$YrSold)
+house$MoSold <-
+  as.factor(house$MoSold)
+```
+
+
+### Variables relacionadas con los baños de la vivienda
+
+```{r}
+sum1 <- house |> 
+  summarise(Variable = "FullBath", min_lead = min(FullBath), max_lead = max(FullBath))
+
+sum2 <- house |> 
+  summarise(Variable = "HalfBath", min_lead = min(HalfBath), max_lead = max(HalfBath))
+
+rbind(sum1, sum2)
+```
+
+Estas dos variables cuentan **los baños totales y los medios baños** de la vivienda. Estas toman el **valor 0** cuando la vivienda **no dispone de estos tipos de baño**. Graficaremos a continuación las dos variables para comprobar como se distribuyen en función de nuestra objetivo `SalePrice`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .7}
+c1 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(FullBath), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Full Bath") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c2 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(HalfBath), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Half Bath") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+multiplot(c1, c2)
+```
+
+Como ninguna de estas dos variables parece muy potente, ni **tampoco tiene una influencia** determinante sobre nuestra objetivo, lo que se ha decidido es **unirlas** para conformar una **nueva variable**. De esta manera, la suma de `FullBath` y $HalfBath * 0.5$ nos ofrecería información acerca del total de baños en la vivienda. La variable `HalfBath` (medios baños) se ponderaría por su significado real dividiendo sus valores y, por tanto, su importancia entre la mitad.
+
+### Variables restantes
+
+```{r}
+sum1 <- house |> 
+  summarise(Variable = "BedroomAbvGr", min_lead = min(BedroomAbvGr), max_lead = max(BedroomAbvGr))
+
+sum2 <- house |> 
+  drop_na(GarageCars) |> 
+  summarise(Variable = "GarageCars", min_lead = min(GarageCars), max_lead = max(GarageCars))
+
+rbind(sum1, sum2)
+```
+Estas dos variables cuentan **las habitaciones y los estacionamientos del garaje** de la vivienda. Estas toman el **valor 0** cuando la vivienda **no dispone de estas áreas**. Graficaremos a continuación las dos variables para comprobar como se distribuyen en función de nuestra objetivo `SalePrice`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .7}
+c1 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(BedroomAbvGr), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Bedrooms") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+c2 <- house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = factor(GarageCars), y = SalePrice)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Parking lots") + 
+  scale_y_continuous(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  theme_minimal()
+
+multiplot(c1, c2)
+```
+
+Visualicemos también el peso de cada modalidad sobre el total de registros.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .7}
+b1 <- ggplot(house, aes(x = factor(BedroomAbvGr))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="Bedroom") +
+  theme_minimal()
+
+b2 <- ggplot(house, aes(x = factor(GarageCars))) +
+  geom_histogram(stat = "Count", fill = "#EB9891") + 
+  labs(x="Parking lots") +
+  theme_minimal()
+
+multiplot(b1, b2)
+```
+
+A la luz de los gráficos, se puede observar como ambas variables siguen una correlación positiva para con nuestra variable objetivo (conclusión coherente, como con las anteriores variables). A partir de los valores 3-4, el número de registros decae para esas modalidades. Seguramente se opte en la fase de reagrupación por eliminar o incluir esas modalidades en la categoría contigua.
+
+## Variables cualitativas {.tabset}
+
+A continuación analizaremos y agruparemos las variables cualitativas de cara a la creación de la receta del **algoritmo KNN en modo regresión**.
+
+### Variables relacionadas con las partes exteriores de la vivienda
+
+```{r}
+house |> 
+  select(where(is.factor)) |> 
+  glimpse()
+```
+ 
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(SalePrice ~ Street, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Street))) |> 
+  ggplot(aes(x = Street, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Street",y = "Sale Price") +
+  theme_minimal()
+
+b2 <- aggregate(SalePrice ~ Alley, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Alley))) |> 
+  ggplot(aes(x = Alley, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Alley",y = "Sale Price") +
+  theme_minimal()
+
+b3 <- aggregate(SalePrice ~ LandContour, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$LandContour))) |> 
+  ggplot(aes(x = LandContour, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "LandContour",y = "Sale Price") +
+  theme_minimal()
+
+b4 <- aggregate(SalePrice ~ LandSlope, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$LandSlope))) |> 
+  ggplot(aes(x = LandSlope, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "LandSlope",y = "Sale Price") +
+  theme_minimal()
+
+b5 <- aggregate(SalePrice ~ RoofStyle, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$RoofStyle))) |> 
+  ggplot(aes(x = RoofStyle, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "RoofStyle",y = "Sale Price") +
+  scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+  theme_minimal()
+
+b6 <- aggregate(SalePrice ~ RoofMatl, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$RoofMatl))) |> 
+  ggplot(aes(x = RoofMatl, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.7)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "RoofMatl",y = "Sale Price") +
+  coord_flip() +
+  theme_minimal()
+
+b7 <- aggregate(SalePrice ~ Exterior1st, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Exterior1st))) |> 
+  ggplot(aes(x = Exterior1st, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.5)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Exterior1st",y = "Sale Price")   +
+  coord_flip() +
+  theme_minimal()
+
+b8 <- aggregate(SalePrice ~ PavedDrive, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$PavedDrive))) |> 
+  ggplot(aes(x = PavedDrive, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "PavedDrive",y = "Sale Price") +
+  theme_minimal()
+
+b9 <- aggregate(SalePrice ~ Fence, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Fence))) |> 
+  ggplot(aes(x = Fence, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Fence",y = "Sale Price") +
+  theme_minimal()
+
+multiplot(b1, b2, b3, b4, b5, b6, b7, b8, b9, cols = 3)
+```
+
+A la luz de los gráficos, todas las variables presentan cierta influencia sobre nuestra variable objetivo, aunque muchas de sus categorías son muy minoritarias. Resulta necesario reagrupar la mayoría de variables. Se agruparan en función de su influencia sobre nuestra objetivo.
+
+-   La variable `Street` presenta dos categorías, pero tan solo una de ellas acapara la gran mayoría de registros (`Pave`). Se optará por **eliminar** esta variable.
+-   La variable `Alley` presenta tres categorías, pero tan solo una de ellas acapara la gran mayoría de registros (`None`). Se optará por agrupar las otras dos `Grvl` y `Pave` en una sola.
+-   La variable `LandSlope` presenta tres categorías, aunque dos tienen muy pocos registros. Se optará por agrupar las categorías `Mod` y `Sev` en una nueva.
+-   La variable `RoofStyle` presenta seis categorías, aunque cuatro de ellas tienen registros inferiores a 10. Se optará por agrupar las categorías `Flat`, `Shed` y `Mansard` en la mayoritaria `Hip`. También se optará por agrupar la categoría `Gambrel` a `Gable`.
+-   La variable `RoofMatl` presenta ocho categorías, aunque tan solo una tiene una proporción elevada de registros. Se optará por **eliminar** esta variable.
+-   La variable `LandContour` presenta cuatro categorías, siendo una de ellas la mayoritaria. Se optará por agrupar las minoritarias `Bnk`, `HLS` y `Low` en una sola.
+-   La variable `Exterior1st` presenta quince categorías. Agruparemos las categorías en función de la barrera de los 150 000 dólares por vivienda.
+-   La variable `PavedDrive` presenta tres categorías, siendo una de ellas la mayoritaria. Se optará por agrupar las minoritarias `N` y `P` en una sola.
+-   La variable `Fence` presenta cinco categorías. Se optará por agrupar las minoritarias `GdWo`, `MnWw` con la mayoritaria `MnPrv` en una sola. Por otro lado, también se optará por agrupar `GdPrv` con `None`.
+
+### Variables relacionadas con la zona en la que se sitúa la vivienda
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(SalePrice ~ MSSubClass, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$MSSubClass))) |> 
+  ggplot(aes(x = MSSubClass, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.7)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "MSSubClass",y = "Sale Price")  +
+  coord_flip() +
+  theme_minimal()
+
+b2 <- aggregate(SalePrice ~ MSZoning, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$MSZoning))) |> 
+  ggplot(aes(x = MSZoning, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "MSZoning",y = "Sale Price") +
+  theme_minimal()
+
+b3 <- aggregate(SalePrice ~ Neighborhood, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Neighborhood))) |> 
+  ggplot(aes(x = Neighborhood, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.7)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Neighborhood",y = "Sale Price") +
+  coord_flip() +
+  theme_minimal()
+
+b4 <- aggregate(SalePrice ~ BldgType, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$BldgType))) |> 
+  ggplot(aes(x = BldgType, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "BldgType",y = "Sale Price") +
+  theme_minimal()
+
+b5 <- aggregate(SalePrice ~ HouseStyle, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$HouseStyle))) |> 
+  ggplot(aes(x = HouseStyle, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "HouseStyle",y = "Sale Price") +
+  theme_minimal()
+
+multiplot(b1, b2, b3, b4, b5, cols = 2)
+```
+
+-   La variable `MSSubClass` presenta quince categorías muy distribuidas. Las agruparemos en tres categorías en función de su relación con nuestra variable objetivo. Distinguimos tres posibles subgrupos: $< 150 000$, y $> 150 000$.
+-   La variable `MSZoning` presenta cinco categorías, pero tan solo dos de ellas acaparan la gran mayoría de registros (`RL` y `RM`). Se optará por agrupar las categorías minoritarias `C (all)` y `RH` en `RM`, y la categoría `FV` en `RL`.
+-   La variable `Neighborhood` presenta veinticinco categorías muy distribuidas. Se optará por agrupar los barrios con viviendas más baratas y más caras juntos. Distinguimos cuatro posibles subgrupos: $< 125 000$, $125 000 > x > 150 000$, $150 000 > x > 200 000$ y $> 200 000$.
+-   La variable `BldgType` presenta cinco categorías, pero tan solo dos de ellas acaparan la gran mayoría de registros (`1Fam` y `TwnhsE`). Se optará por agrupar las categorías mayoritarias `1Fam` y `TwnhsE` juntas. Por su parte, las tres restantes también se agruparán en una nueva (`2fmCon`, `Duplex` y `Twnhs`).
+-   La variable `HouseStyle` presenta ocho categorías, con tres siendo las mayoritarias en número de registros. Se optará por agrupar las categorías `2Story`, `2.5Fin` y `SLvl` en una nueva. Por su parte, también se creará una nueva modalidad para las categorías `1.5Fin`, `1.5Unf`, `1Story`, `2.5Unf` y `SFoyer`.
+
+### Variables relacionadas con los servicios y utilidades de la vivienda
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+b1 <- aggregate(SalePrice ~ Utilities, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Utilities))) |> 
+  ggplot(aes(x = Utilities, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Utilities",y = "Sale Price") +
+  theme_minimal()
+
+b2 <- aggregate(SalePrice ~ Heating, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Heating))) |> 
+  ggplot(aes(x = Heating, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Heating",y = "Sale Price") +
+  theme_minimal()
+
+b3 <- aggregate(SalePrice ~ CentralAir, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$CentralAir))) |> 
+  ggplot(aes(x = CentralAir, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "CentralAir",y = "Sale Price") +
+  theme_minimal()
+
+b4 <- aggregate(SalePrice ~ Electrical, house[!is.na(house$SalePrice), ], median) |>
+  ggplot(aes(x = Electrical, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Electrical",y = "Sale Price") +
+  theme_minimal()
+
+b5 <- aggregate(SalePrice ~ Functional, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$Functional))) |> 
+  ggplot(aes(x = Functional, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Functional",y = "Sale Price") +
+  theme_minimal()
+
+multiplot(b1, b2, b3, b4, b5, cols = 2)
+```
+
+-   La variable `Utilities` presenta dos categorías, pero tan solo una de ellas acapara todos los registros salvo uno. Se optará por **eliminar** esta variable.
+-   La variable `Heating` presenta seis categorías, pero tan solo dos de ellas acaparan la gran mayoría de registros. Se optará por **eliminar** esta variable.
+-   La variable `CentralAir` presenta tan solo dos categorías. La mantendremos tal y como está.
+-   La variable `Electrical` presenta cinco categorías. En este caso, se optará por agrupar todas las minoritarias en una nueva y mantener la mayoritaria `SBrkr`.
+-   La variable `Functional` presenta siete categorías, con una de ellas siendo la mayoritaria en número de registros. Se optará por agrupar todas las minoritarias en una nueva y mantener la mayoritaria `Typ`.
+
+### Variables relacionadas con la venta de la vivienda
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .7}
+b1 <- aggregate(SalePrice ~ SaleType, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$SaleType))) |> 
+  ggplot(aes(x = SaleType, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "SaleType",y = "Sale Price") +
+  theme_minimal()
+
+b2 <- aggregate(SalePrice ~ SaleCondition, house[!is.na(house$SalePrice), ], median) |>
+  mutate(n = pull(count(house[!is.na(house$SalePrice), ]$SaleCondition))) |> 
+  ggplot(aes(x = SaleCondition, y = SalePrice)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  scale_y_continuous(breaks= seq(0, 700000, by = 50000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_hline(aes(yintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "SaleCondition",y = "Sale Price") +
+  theme_minimal()
+
+multiplot(b1, b2)
+```
+
+-   La variable `SaleType` presenta nueve categorías, pero tan solo dos de ellas acaparan la gran mayoría de registros (`WD` y `New`). Se optará por agrupar las categorías con valores más altos respecto de nuestra objetivo, y viceversa. De esta manera, las categorías `Con`, `CWD` y `New` irán juntas. Las cinco minoritarias restantes se añadirán a la mayoritaria `WD`.
+-   La variable `SaleCondition` presenta seis categorías, con tres siendo las mayoritarias en número de registros. Se optará por agrupar las categorías `Normal`, `Abnorml`, `AdjLand`, `Alloca` y `Family` en una nueva. Por otro lado, se mantendrá a la categoría `Partial` tal y como está.
+
+# Fase 1 y 3: Muestreo y modificación de los datos
+
+Tras la fase de exploración de los datos, continuaremos con las fases de **muestreo** y **modificación** de los datos.
+Dado que nuestro dataset contiene tan solo **2919 observaciones** (1460 para train y 1459 para test), no será necesario realizar muestreo (nos quedaríamos prácticamente sin filas si lo hacemos).
+Por otro lado, **iremos fijando semilla** a fin de poder sacar conclusiones de los resultados de nuestros distintos modelos.
+
+En segundo lugar, para la fase de **modificación** de los datos, consideraremos **dos apartados** principales. Uno primero en donde se ejecutarán las **modificaciones estructurales** que afecten a toda las base de datos (transformar variables a factores, problemas de codificación o de rango, variables que no aportan, creación de variables en general, etc.), y uno segundo en donde se llevarán a cabo aquellas **modificaciones** que afecten **a cada algoritmo en concreto** a modo de **receta** (normalización para la métrica, recategorización, tratamiento de outliers/ausentes, dummyficación, etc.).
+
+## Modificaciones estructurales sobre conjuntos test y train/validación
+
+En este caso, como **las particiones ya están realizadas**, vamos a aplicar al conjunto completo (train+ test) las **modificaciones estructurales** para que tengan la **misma forma**.
+
+```{r}
+# Aplicamos las modificaciones estructurales al dataset completo (train + test)
+## Tratamiento de ausentes y transformación de variables texto a factor
+house_complete <- 
+  house_complete |>   
+  mutate(Alley = 
+           ifelse(is.na(Alley), "None", Alley)) |>
+  mutate(BsmtQual = 
+           ifelse(is.na(BsmtQual), "None", BsmtQual)) |> 
+  mutate(BsmtCond = 
+           ifelse(is.na(BsmtCond), "None", BsmtCond)) |>
+  mutate(FireplaceQu = 
+           ifelse(is.na(FireplaceQu), "None", FireplaceQu)) |> 
+  mutate(GarageQual = 
+           ifelse(is.na(GarageQual), "None", GarageQual)) |>
+  mutate(PoolQC = 
+           ifelse(is.na(PoolQC), "None", PoolQC)) |>
+  mutate(Fence = 
+           ifelse(is.na(Fence), "None", Fence))
+
+## Modificaciones en la tipología de las variables
+house_complete$ExterCond <-
+  as.integer(revalue(house_complete$ExterCond, quality))
+house_complete$BsmtQual <-
+  as.integer(revalue(house_complete$BsmtQual, quality))
+house_complete$BsmtCond <-
+  as.integer(revalue(house_complete$BsmtCond, quality))
+house_complete$HeatingQC <-
+  as.integer(revalue(house_complete$HeatingQC, quality))
+house_complete$KitchenQual <-
+  as.integer(revalue(house_complete$KitchenQual, quality))
+house_complete$FireplaceQu <-
+  as.integer(revalue(house_complete$FireplaceQu, quality))
+house_complete$GarageQual <-
+  as.integer(revalue(house_complete$GarageQual, quality))
+house_complete$PoolQC <-
+  as.integer(revalue(house_complete$PoolQC, quality))
+house_complete$KitchenQual[is.na(house_complete$KitchenQual)] <- 3
+house_complete$GarageCars[is.na(house_complete$GarageCars)] <- 2
+
+## Creación de nuevas variables
+house_complete$RemodAdd <- # variable binaria ¿reformada?
+  ifelse(house_complete$YearBuilt == house_complete$YearRemodAdd, 0, 1)
+
+house_complete$New <- # variable binaria ¿es nueva?
+  ifelse(house_complete$YrSold == house_complete$YearBuilt, 1, 0)
+
+house_complete$TotBath <- # variable baño total
+  house_complete$FullBath + (house_complete$HalfBath * 0.5)
+house_complete <- 
+  house_complete |> 
+  select(-c(FullBath, HalfBath))
+
+house_complete$Age <- # variable edad de la vivienda
+  house_complete$YrSold-house_complete$YearRemodAdd
+house_complete <- 
+  house_complete |> 
+  select(-c(YearRemodAdd))
+
+## Transformación del resto a factor
+house_complete$MSSubClass <-
+  as.factor(house_complete$MSSubClass)
+house_complete$YrSold <-
+  as.factor(house_complete$YrSold)
+house_complete$MoSold <-
+  as.factor(house_complete$MoSold)
+
+house_complete <-
+  house_complete |>
+  mutate_if(~!is.numeric(.), as.factor)
+
+## Eliminación de variables por problemas de colinealidad
+house_complete <- 
+  house_complete |> 
+  select(-c(GarageYrBlt, TotalBsmtSF, TotRmsAbvGrd, Fireplaces, GarageArea, PoolArea))
+
+## Eliminación de variables por insustanciales
+house_complete <- 
+  house_complete |> 
+  select(-c(Id, OpenPorchSF, Street, RoofMatl, Utilities, Heating, BedroomAbvGr, PoolQC))
+```
+
+## División de particiones
+
+### Conjuntos train y test
+
+Tras **homogeneizar** los subconjuntos de train y test, los volvemos a **subdividir tal y como se encontraban en origen**.
+
+```{r}
+house_train <- house_complete[1:1460,]
+house_test <- house_complete[1461:2919,]
+```
+
+## Modificaciones dentro de la receta
+
+### Receta para el algoritmo KNN en modo regresión {.tabset}
+
+#### Aplicación de roles
+
+Tras las particiones, **definimos la receta**, indicándole el conjunto donde tenemos validación y train, y enfrentamos nuestra variable objetivo `SalePrice` con todas las demás.
+Después, **asignamos posibles roles**, sujetos a modificación, que nos permitan diferenciar acciones entre las variables.
+
+```{r}
+# Receta
+house_rec_knn <-
+  # Fórmula y datos
+  recipe(data = house_train, SalePrice ~ .)|>
+  # Roles
+  add_role(where(is.factor), 
+           new_role = "cualitativa") |> 
+  add_role(where(is.numeric), 
+           new_role = "cuantitativa") |> 
+  add_role(RemodAdd, New, 
+           new_role = "binaria") |> 
+  add_role(LotFrontage, LotArea, `1stFlrSF`, `2ndFlrSF`, GrLivArea, Age, 
+           new_role = "mediana") |> 
+  add_role(all_nominal_predictors(), 
+           new_role = "moda") |> 
+  add_role(ExterCond, BsmtCond, HeatingQC, GarageQual, KitchenQual,
+           new_role = "imputar mediana") |> 
+  add_role(OverallCond, BsmtQual, FireplaceQu, TotBath, YearBuilt, GarageCars,
+           new_role = "imputar media")
+```
+
+#### Reagrupación de las variables cualitativas
+
+En este apartado, **reagrupamos** las variables **cualitativas** con `step_mutate` con lo definido en la fase de exploración. Para el **algoritmo de clasificación KNN**, cuanto más **agrupadas** estén este tipo de categorías, **mejor**.
+
+```{r}
+house_rec_knn <- 
+  house_rec_knn |> 
+  step_mutate(Alley = 
+                fct_collapse(Alley, 
+                             Grvl_Pave = c("Grvl", "Pave"))) |> 
+  step_mutate(LandSlope = 
+                fct_collapse(LandSlope, 
+                             Mod_Sev = c("Mod", "Sev"))) |>  
+  step_mutate(LandContour = 
+                fct_collapse(LandContour, 
+                             Bnk_HLS_Low = c("Bnk", "HLS", "Low"))) |> 
+  step_mutate(RoofStyle = 
+                fct_collapse(RoofStyle, 
+                             Hip = c("Flat", "Shed", "Mansard", "Hip"),
+                             Gam_Gable = c("Gambrel", "Gable"))) |> 
+  step_mutate(Exterior1st = 
+                fct_collapse(Exterior1st, 
+                            `<150k` = c("AsphShn", "BrkComm", "BrkFace",
+                                        "CemntBd", "HdBoard", "MetalSd",
+                                        "Stucco", "Wd Sdng", "WdShing",
+                                        "AsbShng"),
+                             `>150k` = c("CBlock", "ImStucc", "Plywood",
+                                         "Stone", "VinylSd"))) |> 
+  step_mutate(PavedDrive = 
+                fct_collapse(PavedDrive, 
+                             N_P = c("N", "P"))) |>
+  step_mutate(Fence = 
+                fct_collapse(Fence, 
+                             MnPrv = c("GdWo", "MnWw"),
+                             None = c("GdPrv"))) |> 
+  step_mutate(MSSubClass = 
+                fct_collapse(MSSubClass, 
+                             `<150k` = c("30", "40", "45", "50",
+                                         "80", "85", "120", "160",
+                                         "180", "190"),
+                             `>150k` = c("20", "60", "70", "75",
+                                         "90", "150"))) |>
+  step_mutate(MSZoning = 
+                fct_collapse(MSZoning, 
+                             RM = c("C (all)", "RH"),
+                             RL = c("FV"))) |> 
+  step_mutate(Neighborhood = 
+                fct_collapse(Neighborhood, 
+                             `<125k` = c("BrDale", "BrkSide", "Edwards",
+                                         "IDOTRR", "MeadowV", "OldTown"),
+                             `125k-150k` = c("Blmngtn", "NAmes", "NPkVill",
+                                             "SWISU", "Sawyer"),
+                             `150k-200k` = c("Blueste", "CollgCr", "Gilbert",
+                                             "Mitchel", "NWAmes", "SawyerW"),
+                             `>200k` = c("ClearCr", "Crawfor", "NoRidge",
+                                         "NridgHt", "Somerst", "StoneBr",
+                                         "Timber", "Veenker"))) |> 
+  step_mutate(BldgType = 
+                fct_collapse(BldgType, 
+                             Fam_TwnhsE = c("1Fam", "TwnhsE"),
+                             fmCon_Dup_Twnhs = c("2fmCon", "Duplex", "Twnhs"))) |>  
+  step_mutate(HouseStyle = 
+                fct_collapse(HouseStyle, 
+                             Story_Fin_SLvl = c("2Story", "2.5Fin", "SLvl"),
+                             fmCon_Dup_Twnhs = c("1.5Fin", "1.5Unf", "1Story", 
+                                                 "2.5Unf", "SFoyer"))) |> 
+  step_mutate(Electrical = 
+                fct_collapse(Electrical, 
+                             Other = c("FuseA", "FuseF", "FuseP", "Mix"))) |>
+  step_mutate(Functional = 
+                fct_collapse(Functional, 
+                             Other = c("Maj1", "Maj2", "Min1", "Min2", 
+                                       "Mod", "Sev"))) |>
+  step_mutate(SaleType = 
+                fct_collapse(SaleType, 
+                             Con_CWD_New = c("Con", "CWD", "New"),
+                             WD = c("COD", "ConLD", "ConLI", "ConLw",
+                                       "Oth"))) |> 
+  step_mutate(SaleCondition = 
+                fct_collapse(SaleCondition, 
+                             Normal_Others = c("Abnorml", "AdjLand", "Alloca",
+                                               "Family"))) |>
+  step_mutate(MoSold = 
+                fct_collapse(MoSold, 
+                             Jan_Ap_May_Oct = c("1", "4", "5", "10"),
+                             Mar_Jun_Jul = c("3", "6", "7"),
+                             Feb_Aug_Sep_Nov_Dec = c("2", "8", "9",
+                                                     "11", "12"))) |> 
+  step_mutate(YrSold = 
+                fct_collapse(YrSold, 
+                             `2006-2009` = c("2006", "2007", "2008", "2009")))
+```
+
+#### Recategorización de las variables cuantitativas
+
+En el algoritmo de clasificación **KNN**, la **recategorización** de las variables **cuantitativas no** es estrictamente **necesaria**. Por tanto, en este receta, del total de variables cuantitativas no vamos a modificar ninguna.
+
+#### Outliers
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+box1 <- 
+  ggplot(house_complete, aes(SalePrice, Age)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box2 <- 
+  ggplot(house_complete, aes(SalePrice, LotFrontage)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box3 <- 
+  ggplot(house_complete, aes(SalePrice, LotArea)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box4 <- 
+  ggplot(house_complete, aes(SalePrice, OverallCond)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box5 <- 
+  ggplot(house_complete, aes(SalePrice, YearBuilt)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box6 <- 
+  ggplot(house_complete, aes(SalePrice, ExterCond)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box7 <- 
+  ggplot(house_complete, aes(SalePrice, BsmtQual)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box8 <- 
+  ggplot(house_complete, aes(SalePrice, BsmtCond)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box9 <- 
+  ggplot(house_complete, aes(SalePrice, HeatingQC)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box10 <- 
+  ggplot(house_complete, aes(SalePrice, `1stFlrSF`)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box11 <- 
+  ggplot(house_complete, aes(SalePrice, `2ndFlrSF`)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box12 <- 
+  ggplot(house_complete, aes(SalePrice, GrLivArea)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box13 <- 
+  ggplot(house_complete, aes(SalePrice, KitchenQual)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box14 <- 
+  ggplot(house_complete, aes(SalePrice, FireplaceQu)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box15 <- 
+  ggplot(house_complete, aes(SalePrice, GarageCars)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box16 <- 
+  ggplot(house_complete, aes(SalePrice, GarageQual)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+box17 <- 
+  ggplot(house_complete, aes(SalePrice, TotBath)) +
+  geom_boxplot() +
+  theme_minimal() +
+  coord_flip()
+
+multiplot(box1, box2, box3, box4, box5, box6, box7, box8, box9, box10, cols = 2) 
+multiplot(box11, box12, box13, box14, box15, box16, box17, cols = 2)
+```
+
+Si observamos estos gráficos de cajas y bigotes, todas nuestras variables **cuantitativas continuas** son **asimétricas**, por lo que se detectarán los outliers y se imputarán los ausentes por la **mediana**. Para el caso de las **semi-cuantitativas** (`KitchenQual`, por ejemplo) se imputarán directamente los ausentes por uno de los dos métodos en función de la simetría o asimetría de la variable. Para el resto de variables **cualitativas**, **imputamos** directamente por la **moda**.
+
+```{r}
+house_rec_knn <-
+  house_rec_knn |> 
+  # Detección de outliers por la mediana y por la media
+  step_mutate(across(has_role("mediana"), function(x) { ifelse(abs(scores(x, type = "mad")) > 3 & !is.na(x), NA, x) })) |>
+  # Imputación de ausentes por la mediana, la media y la moda
+  step_impute_median(has_role("mediana")) |>
+  step_impute_median(has_role("imputar_mediana")) |> 
+  step_impute_mean(has_role("imputar_media")) |>
+  step_impute_mode(has_role("moda"))
+```
+
+#### Filtro de correlación
+
+Aplicamos el **filtro de correlación** a nuestras variables **numéricas**.
+
+```{r}
+house_rec_knn <-
+  house_rec_knn |> 
+  step_corr(has_role("cuantitativa"), threshold = 0.9)
+```
+
+#### Normalizar por rango
+
+En el caso del algoritmo **KNN**, necesitaremos **normalizar** nuestras variables por rango para que todas tengan **el mismo peso**, **entre 0 y 1**.
+
+```{r}
+house_rec_knn <-
+  house_rec_knn |> 
+  step_range(all_numeric_predictors(), min = 0, max = 1) |> 
+  step_other(all_nominal_predictors(), threshold = 0.02)
+```
+
+#### Variables dummy
+
+Como esta receta es para el modelo KNN, debemos **dummyficar** nuestras variables cualitativas.
+Para ello, tomamos **todas las nominales, menos nuestra variable objetivo**.
+
+```{r}
+house_rec_knn <-
+  house_rec_knn |>
+  step_dummy(all_nominal(), -all_outcomes())
+```
+
+#### Filtro de cero varianza
+
+```{r}
+house_rec_knn <-
+  house_rec_knn |>
+  step_zv(all_predictors())
+```
+
+#### Horneado
+
+Por último, **horneamos** nuestra receta para comprobar que todas nuestras **nuevas variables** recategorizadas se hayan creado **correctamente**.
+
+```{r}
+bake(house_rec_knn |>  prep(), new_data = NULL)
+```
+
+### Receta para el método árboles de clasificación en modo regresión {.tabset}
+
+#### Aplicación de roles
+
+En este segundo apartado repetiremos la receta, pero esta vez adaptada a los **árboles de clasificación**.
+
+```{r}
+# Receta
+house_rec_arbol <-
+  # Fórmula y datos
+  recipe(data = house_train, SalePrice ~ .)|>
+  # Roles
+  add_role(where(is.factor), new_role = "cualitativa") |> 
+  add_role(where(is.numeric), new_role = "cuantitativa") |> 
+  add_role(RemodAdd, New, new_role = "binaria") |> 
+  add_role(all_nominal_predictors(), new_role = "moda")
+```
+
+#### Reagrupación de las variables cualitativas
+
+En este apartado, **reagrupamos** las variables **cualitativas** con `step_mutate`. Para el método de **árboles de clasificación**, no es necesario agrupar en exceso este tipo de variables, por lo que únicamente agruparemos las variables `Neighborhood` y `Exterior1st` (las que **más modalidades** presentaban).
+
+```{r}
+house_rec_arbol <- 
+  house_rec_arbol |> 
+  step_mutate(Neighborhood = 
+                fct_collapse(Neighborhood, 
+                             `<125k` = c("BrDale", "BrkSide", "Edwards",
+                                         "IDOTRR", "MeadowV", "OldTown"),
+                             `125k-150k` = c("Blmngtn", "NAmes", "NPkVill",
+                                             "SWISU", "Sawyer"),
+                             `150k-200k` = c("Blueste", "CollgCr", "Gilbert",
+                                             "Mitchel", "NWAmes", "SawyerW"),
+                             `>200k` = c("ClearCr", "Crawfor", "NoRidge",
+                                         "NridgHt", "Somerst", "StoneBr",
+                                         "Timber", "Veenker"))) |> 
+  step_mutate(Exterior1st = 
+                fct_collapse(Exterior1st, 
+                            `<150k` = c("AsphShn", "BrkComm", "BrkFace",
+                                        "CemntBd", "HdBoard", "MetalSd",
+                                        "Stucco", "Wd Sdng", "WdShing",
+                                        "AsbShng"),
+                             `>150k` = c("CBlock", "ImStucc", "Plywood",
+                                         "Stone", "VinylSd")))  
+```
+
+#### Recategorización de las variables cuantitativas
+
+Como esta receta es para el método de **árboles de clasificación**, tenemos que **recategorizar** todas las variables **cuantitativas**.
+
+```{r}
+house_rec_arbol <- 
+  house_rec_arbol |> 
+    step_mutate(GrLivArea =
+                cut(GrLivArea,
+                    breaks = c(0, 1000, 2000, 3000, Inf),
+                    labels = c("<1000", "1000-2000", "2000-3000", ">3000"))) |> 
+    step_mutate(`1stFlrSF` =
+                cut(`1stFlrSF`,
+                    breaks = c(0, 1000, 2000, Inf),
+                    labels = c("<1000", "1000-2000", ">2000"))) |>
+    step_mutate(`2ndFlrSF` =
+                cut(`2ndFlrSF`,
+                    breaks = c(0, 500, 1000, 1500, Inf),
+                    labels = c("<500", "500-1000", "1000-1500", ">1500"))) |> 
+    step_mutate(LotArea =
+                cut(LotArea,
+                    breaks = c(0, 10000, 20000, 30000, Inf),
+                    labels = c("<10000", "10000-20000", "20000-30000", ">30000"))) |> 
+    step_mutate(LotFrontage =
+                cut(LotFrontage,
+                    breaks = c(0, 50, 100, 150, Inf),
+                    labels = c("<50", "50-100", "100-150", ">150"))) |> 
+    step_mutate(OverallCond =
+                cut(OverallCond,
+                   breaks = c(-Inf, 3, 4, 5, 6, 7, Inf),
+                   labels = c("1-3", "4", "5", "6", "7", "8-9"))) |> 
+    step_mutate(BsmtCond =
+                cut(BsmtCond,
+                   breaks = c(-Inf, 1, 2, 3, Inf),
+                   labels = c("0-1", "2", "3", "4"))) |> 
+    step_mutate(FireplaceQu =
+               cut(FireplaceQu,
+                   breaks = c(-Inf, 2, 4, Inf),
+                   labels = c("0-2", "3-4", "5"))) |> 
+    step_mutate(ExterCond =
+               cut(ExterCond,
+                  breaks = c(-Inf, 2, 3, Inf),
+                  labels = c("0-2", "3", "4-5"))) |> 
+    step_mutate(KitchenQual =
+               cut(KitchenQual,
+                  breaks = c(-Inf, 3, 4, Inf),
+                  labels = c("2-3", "4", "5"))) |> 
+    step_mutate(BsmtQual =
+               cut(BsmtQual,
+                  breaks = c(-Inf, 2, 3, 4, Inf),
+                  labels = c("0&2", "3", "4", "5"))) |> 
+    step_mutate(GarageQual =
+               cut(GarageQual,
+                  breaks = c(-Inf, 1, 2, Inf),
+                  labels = c("0-1", "2", "3-5"))) |> 
+    step_mutate(HeatingQC =
+               cut(HeatingQC,
+                  breaks = c(-Inf, 3, 4, Inf),
+                  labels = c("1-3", "4", "5"))) |> 
+    step_mutate(YearBuilt =
+               cut(YearBuilt,
+                breaks = c(-Inf, 1920, 1960, Inf),
+                labels = c("<1920", "1920-1960", ">1960"))) |>
+    step_mutate(GarageCars =
+               cut(GarageCars,
+                  breaks = c(-Inf, 1, 2, 3, Inf),
+                  labels = c("0-1", "2", "3", "4"))) |>
+    step_mutate(Age =
+               cut(Age,
+                  breaks = c(-Inf, 10, 20, 30, 40, 50, Inf),
+                  labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "+50"))) |>
+    step_mutate(TotBath =
+               cut(TotBath,
+                  breaks = c(-Inf, 1, 1.5, 2, 2.5, Inf),
+                  labels = c("0-1", "1.5", "2", "2.5", "+3"))) |>
+    step_mutate(RemodAdd =
+               cut(RemodAdd,
+                  breaks = c(-Inf, 0, Inf),
+                  labels = c("No", "Yes"))) |>
+    step_mutate(New =
+               cut(New,
+                  breaks = c(-Inf, 0, Inf),
+                  labels = c("No", "Yes"))) |>
+  step_mutate(across(where(is.character), as_factor))
+```
+
+#### Outliers
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+multiplot(box1, box2, box3, box4, box5, box6, box7, box8, box9, box10, cols = 2) 
+multiplot(box11, box12, box13, box14, box15, box16, box17, cols = 2)
+```
+
+En esta receta se ha optado por **recategorizar** y **reagrupar** todas las variables, incluso las **cuantitativas**. De esta manera, **no hay outliers que detectar**, pues todas las nuevas categorías se han creado **manualmente** a partir de la agrupación de las antiguas modalidades. Aún así, imputamos a los posibles ausentes la **moda** al haber convertido todas las variables en **cualitativas**.
+
+```{r}
+house_rec_arbol <-
+  house_rec_arbol |> 
+  step_impute_mode(all_predictors())
+```
+
+#### Filtro de correlación
+
+Como todas nuestras variables están ahora **recategorizadas** y **convertidas a factor**, **no existen** variables estrictamente **numéricas** a las que aplicar el filtro de correlación.
+
+#### Normalizar por rango
+
+En árboles, **no será necesario normalizar por rango**.
+
+#### Variables dummy
+
+En árboles, **tampoco será necesario dummyficar**.
+
+#### Filtro de cero varianza
+
+```{r}
+house_rec_arbol <-
+  house_rec_arbol |>
+  step_zv(all_predictors())
+```
+
+#### Horneado
+
+Por último, **horneamos** nuestra receta para comprobar que todas nuestras **nuevas variables** recategorizadas se hayan creado **correctamente**.
+
+```{r}
+bake(house_rec_arbol |>  prep(), new_data = NULL)
+```
+
+# Fase 4.1: Modelo y Flujo (KNN en modo regresión)
+
+Una vez definida la receta, definimos el **modelo** y lo unimos con nuestra receta creando un **flujo de clasificación**.
+Se trata de un nuevo modelo con `tune()` para poder definir posteriormente los parámetros de forma **manual**. Activamos, además, el modo regresión con `mode = "regression"`
+
+```{r}
+# Modelo tuneado
+knn_model_tune <-
+  nearest_neighbor(mode = "regression", neighbors = tune("k"),
+                   weight_func = tune("weight"), dist_power = tune("dist")) |>
+  set_engine("kknn")
+
+# Flujo de trabajo
+house_wflow_knn <-
+  workflow() |>
+  add_recipe(house_rec_knn) |>
+  add_model(knn_model_tune)
+```
+
+# Fase 5.1: Evaluación en Validación Cruzada V-Folds (KNN en modo regresión)
+
+Para esta práctica evaluaremos directamente a través del **método de Validación Cruzada V-Folds**, que nos proporcionará además una **métrica media** con la **desviación típica** para cada modelo.
+
+## Creación del grid expandido
+
+Para ello, en primer lugar crearemos un **grid** con la función `expand_grid` que nos permitirá **definir manualmente** los **parámetros** que queramos sin estar condicionados por una función automática.
+De esta manera, podremos **probar** todas las **combinaciones** que queramos.
+Tras comprobar varias combinaciones, finalmente nos decantamos por la siguiente.
+
+```{r}
+grid_knn <-
+  expand_grid("k" = c(8, 20, 60, 80, 100),
+              "weight" = c("inv", "gaussian"),
+              "dist" = c(0.01, 0.9, 2, 5, 15, 20))
+grid_knn
+```
+
+## Aplicación del proceso de validación
+
+Aplicamos en esta fase el proceso de Validación Cruzada V-Folds.
+
+```{r}
+house_cv_folds <- vfold_cv(data = house_train, v = 8, repeats = 4)
+house_cv_folds
+```
+
+```{r}
+set.seed(05492)
+
+clusters <- detectCores() - 1
+make_cluster <- makeCluster(clusters)
+registerDoParallel(make_cluster)
+
+house_knn_vf <-
+ house_wflow_knn |> 
+  tune_grid(resamples = house_cv_folds,
+            grid = grid_knn,
+            control = control_grid(verbose = TRUE, allow_par = TRUE,
+                                   pkgs = c("outliers", "tidyverse")))
+
+# Finalizamos clusters
+stopCluster(make_cluster)
+registerDoSEQ()
+
+house_knn_vf |> collect_metrics()
+```
+
+## Elección del mejor de los modelos
+
+Con `show_best()` se muestran a continuación los **mejores modelos** según `rsq``.
+
+```{r}
+# Se muestran los mejores según rsq
+house_knn_vf |> show_best("rsq")
+```
+
+## Finalización del flujo
+
+Tras elegir el mejor, **finalizamos el flujo con ese modelo elegido** empleando la función `finalize_workflow()`.
+
+```{r}
+# Finalizamos flujo con el mejor modelo según rsq
+best_house_knn_vf <- 
+  house_knn_vf |> select_best("rsq")
+
+final_wflow_knn <- 
+  house_wflow_knn |> 
+  finalize_workflow(best_house_knn_vf)
+
+final_wflow_knn
+```
+
+# Fase 4.2: Modelo y Flujo (Árboles en modo regresión) con poda
+
+A continuación, procederemos con el modelo para la **receta de árboles**.
+El modelo consistirá en un **árbol en modo regresión** que implementaremos con `decision_tree()` y `mode = "regression"`.
+De nuevo, crearemos el modelo con `tune()` para poder definir posteriormente los parámetros de forma **manual**.
+Generamos un flujo de trabajo en función del **criterios de impureza de Gini**.
+
+Por otro lado, añadiremos también directamente el parámetro `cost_complexity`, que se usa en la fase de **poda (prune)**, y que introduce un componente **penalizador** para evitar modelos **sobreajustados**.
+
+```{r}
+# Modelo con tres parámetros tuneados
+decision_tree_gini <-
+  decision_tree(tree_depth = tune("depth"), min_n = tune("min_n"), 
+                cost_complexity = tune("cost")) |> 
+  set_engine("rpart") |> 
+  set_mode("regression")
+```
+
+```{r}
+# Flujo de trabajo
+house_tree_gini_wflow <-
+  workflow() |>
+  add_recipe(house_rec_arbol) |>
+  add_model(decision_tree_gini)
+```
+
+# Fase 5.2: Evaluación en Validación Cruzada V-Folds (Árboles en modo regresión)
+
+Para este modelo, volvemos a evaluar a través del **método de Validación Cruzada V-Folds**, que nos proporcionará además una **métrica media** con la **desviación típica** para cada modelo.
+
+## Creación del grid expandido
+
+Para ello, en primer lugar crearemos un **grid** con la función `expand_grid` que nos permitirán **definir manualmente** los **parámetros** que queramos sin estar condicionados por una función automática.
+De nuevo, tras comprobar varias combinaciones, nos decantaremos finalmente por el siguiente.
+
+```{r}
+grid_tree_gini <-
+  expand_grid("depth" = c(4, 6, 7, 8, 10),
+              "min_n" = c(45, 50, 55, 100, 150),
+              "cost" = 10^c(-5, -4, -3, -0.5))
+```
+
+Crearemos en este caso **100 modelos** ($5*5*4$).
+
+## Aplicación del proceso de validación
+
+Aplicamos en esta fase el proceso de **Validación Cruzada V-Folds**.
+
+```{r}
+set.seed(05492)
+
+clusters <- detectCores() - 1
+make_cluster <- makeCluster(clusters)
+registerDoParallel(make_cluster)
+
+house_tree_gini <-
+  house_tree_gini_wflow |> 
+  tune_grid(resamples = house_cv_folds,
+            grid = grid_tree_gini,
+            control = control_grid(verbose = TRUE, allow_par = TRUE,
+                                   pkgs = c("outliers", "tidyverse"), save_pred = TRUE))
+
+# Finalizamos clusters
+stopCluster(make_cluster)
+registerDoSEQ()
+
+house_tree_gini |> collect_metrics()
+```
+
+## Elección del mejor de los modelos
+
+Como sucedía en el modelo KNN, procedemos a ver los mejores con `show_best()`.
+
+```{r}
+# Se muestran los mejores según rsq
+house_tree_gini |>  show_best("rsq", n = 10)
+```
+
+## Finalización del flujo
+
+Tras elegir el mejor, **finalizamos el flujo con ese modelo elegido** empleando la función `finalize_workflow()`.
+
+```{r}
+# Finalizamos flujo con el mejor modelo según rsq
+best_house_tree_gini <-
+  house_tree_gini |> select_best("rsq")
+
+final_wf_tree_gini <- 
+  house_tree_gini_wflow |> 
+  finalize_workflow(best_house_tree_gini)
+
+final_wf_tree_gini
+```
+
+# Comparativa final entre modelos: KNN y árbol en modo regresión
+
+A continuación un resumen de sus métricas para hacer la **comparativa**:
+
+## Métricas de los modelos
+
+```{r}
+# Modelo KNN
+house_knn_vf |> 
+  collect_metrics() |> 
+  filter(.config == pull(select(best_house_knn_vf, .config)))
+
+# Modelo Árbol Gini
+house_tree_gini |> 
+  collect_metrics() |> 
+  filter(.config == pull(select(best_house_tree_gini, .config)))
+```
+
+Tanto en **RMSE** como en **RSQ** el modelo KNN parece **mejor**: presenta un **menor RMSE** y también un **mayor RSQ**.
+
+## Predicción para el mejor modelo: KNN
+
+Nos quedamos finalmente con el **KNN**.
+
+```{r eval = FALSE}
+# Ajuste
+house_knn_fit <- 
+  fit(final_wflow_knn, house_train)
+
+# Predicciones
+pred_knn <-
+  predict(house_knn_fit, house_test)
+summary(pred_knn)
+
+# Visualización de las predicciones para cada `Id`
+final_pred <- 
+  data.frame(Id = c(1461:2919), pred_knn) |> 
+  dplyr::rename(SalePrice = .pred)
+
+head(final_pred)
+
+# Exportamos nuestro dataframe para subirlo a Kaggle
+write.csv(final_pred, file = 'house_entrega_knn.csv', row.names = FALSE)
+```
+
+# Fase 4.3: Receta, Modelo y Flujo (Regresión univariante)
+
+El tercer modelo que vamos a probar para predecir será la **regresión univariante**. En este tipo de regresión, seleccionaremos la variable que **mayor correlación** presenta respecto de nuestra **variable objetivo** `SalePrice`. A continuación, visualizaremos de nuevo la **matriz de correlaciones** y seleccionaremos la susodicha variable.
+
+## Preliminares
+
+### Selección de nuestra variable (matriz de correlaciones)
+
+```{r}
+cor_matrix <- 
+  house_train |> select(where(is.numeric)) |> cor(use = "pairwise.complete.obs", method = "pearson")
+```
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+cor_matrix |>
+  corrplot(method = "number", tl.cex = 0.55, number.cex = 0.7, type = "lower")
+```
+
+A la vista de la matriz, la variable que **mayor correlación** presenta respecto de nuestra objetivo es `GrLivArea` con un **coeficiente de correlación del 0.71**. De esta manera, pasaremos a predecir nuestra objetivo `SalePrice` en función de `GrLivArea`.
+
+### Comprobación de datos ausentes
+
+Como la **regresión univariante** no admite ausentes ni en la predictora ni en la objetivo, lo que vamos a hacer es utilizar únicamente el **conjunto de train** en el que nuestra variable **objetivo** está completamente **etiquetada**.
+
+```{r}
+ausentes <- 
+  apply(house_train, 2, function(x) sum(is.na(x)))
+
+ausentes_tb <- 
+  tibble(Variable = names(house_train), Ausentes = ausentes) |> 
+  filter(Variable == "GrLivArea" | Variable == "SalePrice")
+ausentes_tb
+```
+
+Como se puede observar, **no hay ausentes** ni en nuestra predictora ni en nuestra objetivo.
+
+### Comprobación de outliers
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .5}
+house[!is.na(house$SalePrice), ] |> 
+  ggplot(aes(x = GrLivArea, y = SalePrice)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  scale_y_log10(breaks= seq(0, 800000, by = 100000), 
+                     labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_x_log10(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_text_repel(aes(label = ifelse(house$GrLivArea[!is.na(house$SalePrice)] > 4000, 
+                                     rownames(house), ""))) +
+  geom_text_repel(aes(label = ifelse(house$SalePrice[!is.na(house$SalePrice)] < 50000, 
+                                     rownames(house), ""))) +
+  theme_minimal()
+```
+
+Si se grafica la relación siguiendo una **escala logarítmica**, podremos visualizar claramente esa **correlación directa** entre variables: **a mayor superficie habitable, mayor precio**. Además, podemos visualizar también varios valores atípicos. Respecto de la variable`GrLivArea`, tenemos las tuplas correspondientes a los `Id` **692, 1183, 524 y 1299**. Pasaremos ahora a detectarlos numéricamente, pero antes **transformaremos nuestras variables a logarítmicas**.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+house_log <-
+  house_train |> 
+  mutate(SalePrice = log(SalePrice),
+         GrLivArea = log(GrLivArea))
+cor_matrix <- 
+  house_log |> 
+  select(where(is.numeric)) |>  cor(use = "pairwise.complete.obs", method = "pearson")
+
+cor_matrix |>
+  corrplot(method = "number", tl.cex = 0.55, number.cex = 0.7, type = "lower")
+```
+
+El **coeficiente de correlación** ha aumentado ligeramente, de **0.71** a **0.73**.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .7}
+gg1 <- ggplot(house_train, aes(sample = SalePrice))+ 
+  stat_qq()+
+  stat_qq_line()+ 
+  labs(x = "SalePrice (lineal)", y = "") +
+  theme_minimal()
+
+gg2 <- ggplot(house_train, aes(sample = GrLivArea))+ 
+  stat_qq()+
+  stat_qq_line()+ 
+  labs(x = "GrLivArea (lineal)", y = "") +
+  theme_minimal()
+
+gg3 <- ggplot(house_log, aes(sample = SalePrice))+ 
+  stat_qq()+
+  stat_qq_line()+ 
+  labs(x = "SalePrice (logarítmica)", y = "") +
+  theme_minimal()
+
+gg4 <- ggplot(house_log, aes(sample = GrLivArea))+ 
+  stat_qq()+
+  stat_qq_line()+ 
+  labs(x = "GrLivArea (logarítmica)", y = "") +
+  theme_minimal()
+
+multiplot(gg1, gg2, gg3, gg4, cols = 2)
+```
+
+En **ambas variables** podemos observar como la transformación a logaritmo **favorece la relación lineal**. Ahora sí, pasemos a **detectar outliers** sobre nuestra predictora:
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+house_log |> 
+  ggplot(aes(x = SalePrice)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución del precio de las viviendas (escala logarítmica)", x = "Precio", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(SalePrice, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(SalePrice, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+
+house_log |> 
+  ggplot(aes(x = GrLivArea)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución de la superficie habitable de las viviendas en pies cuadrados (escala logarítmica)", x = "Pies cuadrados", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(GrLivArea, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(GrLivArea, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+```
+
+Ambas variables parecen seguir distribuciones **más o menos simétricas**, por lo que detectaremos los **outliers** de la predictora por la **media**.
+
+```{r}
+house_log |>  
+  mutate(outliers = abs(scores(GrLivArea, type = "z")) > 2.5) |> 
+  filter(outliers)
+```
+
+Durante la creación de la receta le **imputaremos** a estos outliers la **media**.
+
+## Receta para el método de regresión univariante
+
+```{r}
+house_rec_uni <-
+  recipe(data = house_train, SalePrice ~ GrLivArea) |> 
+  step_log(SalePrice, base = 10) |> 
+  step_log(GrLivArea, base = 10) |> 
+  step_mutate(GrLivArea = ifelse(abs(scores(GrLivArea, type = "z")) > 2.5, NA, GrLivArea)) |> 
+  step_impute_mean(GrLivArea)
+house_rec_uni
+```
+
+### Horneado
+
+Por último, **horneamos** nuestra receta para comprobar que todo funciona **correctamente**.
+
+```{r}
+bake(house_rec_uni |> prep(), new_data = NULL) 
+```
+
+## Modelo y Flujo
+
+```{r}
+# Creación del modelo
+reg_lineal <- 
+  linear_reg() |> set_mode("regression") |> set_engine("lm")
+```
+
+```{r}
+# Creación del flujo
+reg_wflow_uni <-
+  workflow() |> 
+  add_model(reg_lineal) |> 
+  add_recipe(house_rec_uni)
+reg_wflow_uni
+```
+
+## Ajuste
+
+```{r}
+set.seed(05492)
+
+reg_fit_uni <-
+  reg_wflow_uni |> fit(data = house_train)
+reg_fit_uni 
+```
+ 
+```{r}
+# Resumen del ajuste
+tidy(reg_fit_uni)
+```
+
+Como se puede observar en las métricas, el modelo que se ha decidido crear se trata de un **modelo doble logarítmico**. La **interpretación** de $\beta_1$ es la siguiente: si el logaritmo de la **superficie habitable** de una vivienda **aumenta en un 1 %** se estima que, en media, el logaritmo del **precio** de la vivienda se **incrementará en un 0,88 %**. Esta relación no es más que la **elasticidad** entre la superficie habitable de una vivienda y su precio y se trata, además, de una **relación constante**. Por otro lado, $\beta_0$ puede interpretarse como el valor medio del precio de la vivienda **cuando la superficie habitable toma valor cero**. En este caso, $\beta_0$ toma el valor de **2.44**, aunque en muchas situaciones su interpretación carece de sentido.
+
+Por otro lado, en la salida del modelo podemos observar como el **p-valor** coligado al parámetro $\beta_1$ y al estadístico para este contraste es **p = 1.415987e-211**. Si trabajamos con un nivel de significación habitual del 5 % (0.05), el p-valor es menor que ese nivel de significación, por lo que podemos **rechazar la hipótesis nula**, esto es, **la no significación individual** de la variable `log(GrLivArea)` al 5 % de significación. Por ende, a la luz de los resultados, $\beta_1$ **es significativo individualmente**, o lo que es lo mismo: el efecto de la variable `log(GrLivArea)` depende de la variable `log(SalePrice)` al 5 % de nivel de significación.
+
+### Intervalo de confianza e índices performáticos del modelo
+
+```{r}
+# Intervalo de confianza al 95 %
+confint(reg_fit_uni |> extract_fit_engine())
+```
+
+Los intervalos de confianza nos ofrecen un **rango de valores** para $\beta_j$ en donde **no se rechazaría** la hipótesis $H_0$. En este caso concreto, el intervalo de confianza nos proporcionará un rango de valores para la variable explicativa `log(GrLivArea)` en donde podríamos comprobar su significación individual dentro del modelo.
+
+```{r}
+reg_fit_uni |> extract_fit_engine() |>  performance()
+```
+
+## Diagnosis
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+check_model(reg_fit_uni |> extract_fit_engine())
+```
+
+### Supuesto de linealidad
+
+En el gráfico, la **línea es bastante atendencial**, se ve bastante **monótona** en todo su recorrido. Comprobémoslo analíticamente con un **ANOVA entre residuos y predictora**:
+
+```{r}
+adjustment <- 
+  reg_fit_uni |>  extract_fit_engine()
+lm(adjustment$residuals ~ adjustment$fitted.values) |>  anova()
+lm(adjustment$residuals ~ I(adjustment$fitted.values^2) + adjustment$fitted.values) |>  anova()
+```
+
+Como se puede observar, el **p-valor de la prueba F de Fisher-Snedecor** es igual a **1**, por lo que, a un nivel de significación del 0.05, **no** podemos **rechazar la hipótesis nula**, esto es, **la no existencia de una relación lineal entre la predictora (GrLivArea) y sus residuos**. Por tanto, ello implica que **no parece existir tendencia lineal entre residuos y predictora** en nuestro modelo. Lo mismo ocurre en el segundo caso: **tampoco parece existir tendencia cuadrática entre residuos y predictora**.
+
+### Supuesto de homocedasticidad
+
+En el gráfico, la **línea es bastante atendencial**, se ve bastante **monótona** en todo su recorrido (excepto quizá en los extremos). Comprobémoslo analíticamente con un **test de heterocedasticidad**:
+
+```{r}
+check_heteroscedasticity(adjustment)
+```
+
+Según el test de heterocedasticidad, **el supuesto de homocedasticidad no se cumple para nuestro modelo**. Esto, muy a menudo, resulta poco realista, pues el supuesto implica que la variabilidad del error de la variable objetivo es la misma para cualquier nivel de nuestra predictora.
+
+```{r}
+ggplot(
+  tibble("Observaciones" = 1:length(adjustment$residuals),
+         "Residuos" = adjustment$residuals),
+  aes(x = Observaciones, y = Residuos)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal()
+```
+
+En el gráfico, la **recta de regresión se aprecia constante**, en torno a 0, y **los residuos se agrupan en torno a una banda también relativamente constante**.
+
+### Supuesto de normalidad de los residuos
+
+En el gráfico, los **percentiles empíricos de los residuos se acoplan bastante bien a la diagonal**, excepto en los extremos. Comprobémoslo analíticamente con un **contraste de normalidad**:
+
+```{r}
+library(olsrr)
+ols_test_normality(adjustment$residuals)
+```
+
+Como se puede observar, los **p-valor** de los distintos test son iguales a **0**, por lo que, a un nivel de significación del 0.05, podemos **rechazar la hipótesis de normalidad**. Por tanto, **no podemos asumir a normalidad en nuestro modelo**. Se han hecho pruebas con cambios en la receta añadiendo distintas transformaciones a nuestra objetivo (`step_YeoJohnson()`, `step_BoxCox()`, `step_sqrt()`), pero **tampoco ha sido posible**.
+
+### Incorrelación de los residuos
+
+```{r}
+library(car)
+durbinWatsonTest(adjustment)
+```
+
+Como se puede observar, el **p-valor de la prueba Durbin-Watson** es igual a **0.476**, por lo que, a un nivel de significación del 0.05, **no** podemos **rechazar la hipótesis nula**, esto es, **la incorrelación de los residuos**.
+
+### Influencia de los residuos
+
+En el gráfico original de la diagnosis, **todas las observaciones parecen estar contenidas entre las líneas punteadas al 0.5**.
+
+# Fase 5.3: Evaluación del modelo (Regresión univariante)
+
+## Resumen
+
+```{r}
+glance(reg_fit_uni)
+```
+
+Nuestro $R^2$ es igual a **0.4838**, por lo que **el ratio de información explicada del modelo es del 48.38 %**. Al ser un modelo tan simple con una única variable, la interpretación del resto de parámetros no tiene mucho sentido. Los dejaremos para los próximos modelos. A continuación, predeciremos y evaluaremos en un nuevo conjunto test que extraeremos de `house_train`, puesto que nuestro conjunto `house_test` original tiene la variable objetivo `SalePrice` repleta de NA.
+
+## Evaluación y predicciones en test
+
+```{r}
+# Hacemos el split. Lo hacemos del 0.6 ya que hay pocos datos en train. 
+set.seed(05492)
+
+split_house <- 
+  initial_split(house_train, prop = 0.6)
+
+# Predecimos en test
+fit_reg_uni <- 
+  reg_wflow_uni |> last_fit(split = split_house)
+
+# Evaluamos en test
+fit_reg_uni |>  collect_metrics()
+```
+
+## Visualización de errores en test
+
+```{r}
+# Errores en test
+pred_test <-
+  fit_reg_uni |>
+  collect_predictions() |>
+  mutate(error = SalePrice - .pred)
+pred_test
+```
+En esta tabla se puede observar cómo, en nuestro modelo doble logarítmico, las **estimaciones se ajustan en gran medida** a los valores **reales** de la objetivo `SalePrice`. Visualizaremos ahora estos valores a través de un gráfico.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+g1 <- pred_test |> 
+  ggplot(mapping = aes(x = .pred, y = SalePrice)) +
+  geom_point(color = "#56BCC2", alpha = 0.6, size = 4) +
+  geom_abline(intercept = 0, slope = 1, color = "#EB9891", size = 1.2) +
+  theme_minimal() + 
+  labs(title = "Resultados de la regresión lineal univariante",
+       subtitle = "Los valores predichos deberían estar cercanos a la diagonal",
+       x = "Predicciones",
+       y = "Valores reales")
+
+g2 <- pred_test |> 
+  select(.pred, SalePrice) |> 
+  gather(Distribución, value) |> 
+  ggplot(aes(x = value, color = Distribución, fill = Distribución)) + 
+  geom_density(alpha = 0.6) + 
+  theme_minimal() + 
+  labs(title = "Distribución de las predicciones sobre los valores reales de SalePrice",
+       x = "Distribuciones",
+       y = "Frecuencia")
+
+multiplot(g1, g2)
+```
+
+Como se puede apreciar en los gráficos, las **predicciones** son un poco **reguleras**, principalmente por el **reducido tamaño muestral** y por el **bajo** $R^2$ (finalmente, el ratio de información explicada del modelo fue del **49.88 %**). Tampoco se han cumplido varias de las hipótesis. Desde una regresión lineal univariante, en la que únicamente disponemos de **una única variable** para predecir la objetivo, poco más se puede hacer. En los siguientes apartados avanzaremos hacia la **regresión multivariante** con la creación de dos nuevos modelos.
+
+# Fase 4.4: Receta, Modelo y Flujo (Regresión multivariante: modelo saturado)
+
+Para este nuevo modelo de regresión vamos a emplear **todas las variables**. Volvemos a generar la **receta**, pero esta vez **enfrentando nuestra objetivo** al **total** de variables **predictoras** que tenemos en el dataset.
+ 
+## Receta para el método de regresión multivariante
+
+#### Aplicación de roles
+
+Volvemos a **definir una nueva receta** indicándole el conjunto donde tenemos validación y train, y enfrentando nuestra variable objetivo `SalePrice` a todas las demás.
+Después, **asignamos posibles roles**, sujetos a modificación, que nos permitan diferenciar acciones entre las variables (sobre todo en la sección outliers).
+
+```{r}
+# Receta
+house_rec_multi <-
+  # Fórmula y datos
+  recipe(data = house_train, SalePrice ~ .)|>
+  # Roles
+  add_role(where(is.factor), 
+           new_role = "cualitativa") |> 
+  add_role(where(is.numeric), 
+           new_role = "cuantitativa") |> 
+  add_role(RemodAdd, New, 
+           new_role = "binaria") |> 
+  add_role(LotFrontage, LotArea, `1stFlrSF`, `2ndFlrSF`, GrLivArea, Age, 
+           new_role = "mediana") |> 
+  add_role(all_nominal_predictors(), 
+           new_role = "moda") |> 
+  add_role(ExterCond, BsmtCond, HeatingQC, GarageQual, KitchenQual,
+           new_role = "imputar mediana") |> 
+  add_role(OverallCond, BsmtQual, FireplaceQu, TotBath, YearBuilt, GarageCars,
+           new_role = "imputar media") |> 
+  add_role(SalePrice, GrLivArea,`1stFlrSF`, `2ndFlrSF`,
+           new_role = "log")
+```
+
+#### Reagrupación de las variables cualitativas
+
+En este apartado, **reagrupamos** las variables **cualitativas** con `step_mutate` con lo definido en la fase de exploración. Vamos a reducir el número de categorías para que, al dummyficar, no se creen en exceso sin ser realmente necesarias.
+
+```{r}
+house_rec_multi <- 
+  house_rec_multi |> 
+  step_mutate(Alley = 
+                fct_collapse(Alley, 
+                             Grvl_Pave = c("Grvl", "Pave"))) |> 
+  step_mutate(LandSlope = 
+                fct_collapse(LandSlope, 
+                             Mod_Sev = c("Mod", "Sev"))) |>  
+  step_mutate(LandContour = 
+                fct_collapse(LandContour, 
+                             Bnk_HLS_Low = c("Bnk", "HLS", "Low"))) |> 
+  step_mutate(RoofStyle = 
+                fct_collapse(RoofStyle, 
+                             Hip = c("Flat", "Shed", "Mansard", "Hip"),
+                             Gam_Gable = c("Gambrel", "Gable"))) |> 
+  step_mutate(Exterior1st = 
+                fct_collapse(Exterior1st, 
+                            `<150k` = c("AsphShn", "BrkComm", "BrkFace",
+                                        "CemntBd", "HdBoard", "MetalSd",
+                                        "Stucco", "Wd Sdng", "WdShing",
+                                        "AsbShng"),
+                             `>150k` = c("CBlock", "ImStucc", "Plywood",
+                                         "Stone", "VinylSd"))) |> 
+  step_mutate(PavedDrive = 
+                fct_collapse(PavedDrive, 
+                             N_P = c("N", "P"))) |>
+  step_mutate(Fence = 
+                fct_collapse(Fence, 
+                             MnPrv = c("GdWo", "MnWw"),
+                             None = c("GdPrv"))) |> 
+  step_mutate(MSSubClass = 
+                fct_collapse(MSSubClass, 
+                             `<150k` = c("30", "40", "45", "50",
+                                         "80", "85", "120", "160",
+                                         "180", "190"),
+                             `>150k` = c("20", "60", "70", "75",
+                                         "90", "150"))) |>
+  step_mutate(MSZoning = 
+                fct_collapse(MSZoning, 
+                             RM = c("C (all)", "RH"),
+                             RL = c("FV"))) |> 
+  step_mutate(Neighborhood = 
+                fct_collapse(Neighborhood, 
+                             `<125k` = c("BrDale", "BrkSide", "Edwards",
+                                         "IDOTRR", "MeadowV", "OldTown"),
+                             `125k-150k` = c("Blmngtn", "NAmes", "NPkVill",
+                                             "SWISU", "Sawyer"),
+                             `150k-200k` = c("Blueste", "CollgCr", "Gilbert",
+                                             "Mitchel", "NWAmes", "SawyerW"),
+                             `>200k` = c("ClearCr", "Crawfor", "NoRidge",
+                                         "NridgHt", "Somerst", "StoneBr",
+                                         "Timber", "Veenker"))) |> 
+  step_mutate(BldgType = 
+                fct_collapse(BldgType, 
+                             Fam_TwnhsE = c("1Fam", "TwnhsE"),
+                             fmCon_Dup_Twnhs = c("2fmCon", "Duplex", "Twnhs"))) |>  
+  step_mutate(HouseStyle = 
+                fct_collapse(HouseStyle, 
+                             Story_Fin_SLvl = c("2Story", "2.5Fin", "SLvl"),
+                             fmCon_Dup_Twnhs = c("1.5Fin", "1.5Unf", "1Story", 
+                                                 "2.5Unf", "SFoyer"))) |> 
+  step_mutate(Electrical = 
+                fct_collapse(Electrical, 
+                             Other = c("FuseA", "FuseF", "FuseP", "Mix"))) |>
+  step_mutate(Functional = 
+                fct_collapse(Functional, 
+                             Other = c("Maj1", "Maj2", "Min1", "Min2", 
+                                       "Mod", "Sev"))) |>
+  step_mutate(SaleType = 
+                fct_collapse(SaleType, 
+                             Con_CWD_New = c("Con", "CWD", "New"),
+                             WD = c("COD", "ConLD", "ConLI", "ConLw",
+                                       "Oth"))) |> 
+  step_mutate(SaleCondition = 
+                fct_collapse(SaleCondition, 
+                             Normal_Others = c("Abnorml", "AdjLand", "Alloca",
+                                               "Family"))) |>
+  step_mutate(MoSold = 
+                fct_collapse(MoSold, 
+                             Jan_Ap_May_Oct = c("1", "4", "5", "10"),
+                             Mar_Jun_Jul = c("3", "6", "7"),
+                             Feb_Aug_Sep_Nov_Dec = c("2", "8", "9",
+                                                     "11", "12"))) |> 
+  step_mutate(YrSold = 
+                fct_collapse(YrSold, 
+                             `2006-2009` = c("2006", "2007", "2008", "2009")))
+```
+
+#### Recategorización de las variables cuantitativas
+
+En los métodos de regresión, la **recategorización** de las variables **cuantitativas no** es estrictamente **necesaria**. Por tanto, en este receta, del total de variables cuantitativas no vamos a modificar ninguna.
+
+#### Outliers
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+multiplot(box1, box2, box3, box4, box5, box6, box7, box8, box9, box10, cols = 2) 
+multiplot(box11, box12, box13, box14, box15, box16, box17, cols = 2)
+```
+
+Si observamos estos gráficos de cajas y bigotes, todas nuestras variables **cuantitativas continuas** son **asimétricas**, por lo que se detectarán los outliers y se imputarán los ausentes por la **mediana**. Para el caso de las **semi-cuantitativas** (`KitchenQual`, por ejemplo) se imputarán directamente los ausentes por uno de los dos métodos en función de la simetría o asimetría de la variable. Para el resto de variables **cualitativas**, **imputamos** directamente por la **moda**.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |> 
+  # Detección de outliers por la mediana y por la media
+  step_mutate(across(has_role("mediana"), function(x) { ifelse(abs(scores(x, type = "mad")) > 3 & !is.na(x), NA, x) })) |>
+  # Imputación de ausentes por la mediana, la media y la moda
+  step_impute_median(has_role("mediana")) |>
+  step_impute_median(has_role("imputar_mediana")) |> 
+  step_impute_mean(has_role("imputar_media")) |>
+  step_impute_mode(has_role("moda"))
+```
+
+#### YeoJohnson para la normalidad de los residuos
+
+A fin de que nuestro modelo cumpla los **test de normalidad de los residuos**, vamos a incluir en la receta la función `step_YeoJohnson`, que se emplea para **eliminar la asimetría en los datos numéricos** del modelo.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |> 
+  step_YeoJohnson(all_numeric_predictors(), -has_role("log"))
+```
+
+#### Transformación logarítmica de algunas variables
+
+Transformamos algunas variables a **logarítmicas** para mejorar su relación.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |> 
+  step_log(has_role("log"), offset = 1) 
+```
+
+#### Normalizar por rango
+
+**Normalizamos** nuestras variables por rango para que todas tengan **el mismo peso**, **entre 0 y 1**.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |> 
+  step_normalize(all_numeric_predictors()) 
+```
+
+#### Variables dummy
+
+Como esta receta es para un modelo de regresión multivariante, debemos **dummyficar** nuestras variables cualitativas.
+Para ello, tomamos **todas las nominales, menos nuestra variable objetivo**.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |>
+  step_dummy(all_nominal_predictors())
+```
+
+#### Filtro de cero varianza
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |>
+  step_zv(all_predictors())
+```
+
+#### Filtro de correlación
+
+Aplicamos el **filtro de correlación** a nuestras variables **numéricas**.
+
+```{r}
+house_rec_multi <-
+  house_rec_multi |> 
+  step_corr(all_numeric_predictors(), threshold = 0.6)
+```
+
+#### Horneado
+
+Por último, **horneamos** nuestra receta para comprobar que todas nuestras **nuevas variables** recategorizadas se hayan creado **correctamente**.
+
+```{r}
+bake(house_rec_multi |>  prep(), new_data = NULL)
+```
+
+## Flujo y ajuste
+
+```{r}
+# Creación del flujo
+reg_wflow_multi <-
+  workflow() |> 
+  add_model(reg_lineal) |> 
+  add_recipe(house_rec_multi)
+reg_wflow_multi
+```
+
+```{r}
+set.seed(05492)
+
+reg_fit_multi <-
+  reg_wflow_multi |> fit(data = house_train)
+reg_fit_multi
+```
+ 
+```{r}
+# Resumen del ajuste
+tidy(reg_fit_multi)
+tidy(reg_fit_multi) |> 
+  filter(p.value > 0.5)
+```
+
+Como se puede observar en las métricas, los **p-valor** coligados a los parámetros $\beta$ de las variables `ExterCond`, `New`, `Exterior1st_X.150k`, `Electrical_SBrkr`, `MoSold_Mar_Jun_Jul` y `YrSold_X2010` son **superiores a 0.05**. Si trabajamos con un nivel de significación habitual del 5 % (0.05), el p-valor es mayor que ese nivel de significación, por lo que **no podemos rechazar la hipótesis nula**, esto es, **la no significación individual** de estas variables al 5 % de significación. Por ende, a la luz de los resultados, `ExterCond`, `New`, `Exterior1st_X.150k`, `Electrical_SBrkr`, `MoSold_Mar_Jun_Jul` y `YrSold_X2010` son variables **no significativas individualmente**. Optaremos por **eliminarlas** posteriormente en la selección de modelos porque solo aportan ruido.
+
+### Índices performáticos del modelo
+
+```{r}
+reg_fit_multi |> extract_fit_engine() |>  performance()
+```
+
+Nuestro $R^2$ es igual a **0.879**, por lo que **el ratio de información explicada del modelo es del 88 %**. Este modelo **ha duplicado** el ratio de información explicada respecto del modelo univariante anterior.
+
+## Diagnosis
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+check_model(reg_fit_multi |> extract_fit_engine())
+```
+
+### Supuesto de linealidad
+
+En el gráfico, la **línea es bastante atendencial**, se ve bastante **monótona** en todo su recorrido. Comprobémoslo analíticamente con un **ANOVA entre residuos y predictora**:
+
+```{r}
+adjustment <- 
+  reg_fit_multi |>  extract_fit_engine()
+lm(adjustment$residuals ~ adjustment$fitted.values) |>  anova()
+lm(adjustment$residuals ~ I(adjustment$fitted.values^2) + adjustment$fitted.values) |>  anova()
+```
+
+Como se puede observar, el **p-valor de la prueba F de Fisher-Snedecor** es igual a **1**, por lo que, a un nivel de significación del 0.05, **no** podemos **rechazar la hipótesis nula**, esto es, **la no existencia de una relación lineal entre las predictoras y sus residuos**. Por tanto, ello implica que **no parece existir tendencia lineal entre residuos y predictoras** en nuestro modelo. Lo mismo ocurre en el segundo caso: **tampoco parece existir tendencia cuadrática entre residuos y predictoras**.
+
+### Supuesto de homocedasticidad
+
+En el gráfico, la **línea sigue una fase decreciente al principio y creciente al final**, se ve poco **monótona** en todo su recorrido. Comprobémoslo analíticamente con un **test de heterocedasticidad**:
+
+```{r}
+check_heteroscedasticity(adjustment)
+```
+
+Según el test de heterocedasticidad, **el supuesto de homocedasticidad no se cumple para nuestro modelo**. Esto, muy a menudo, resulta poco realista, pues el supuesto implica que la variabilidad del error de la variable objetivo es la misma para cualquier nivel de nuestra predictora.
+
+```{r}
+ggplot(
+  tibble("Observaciones" = 1:length(adjustment$residuals),
+         "Residuos" = adjustment$residuals),
+  aes(x = Observaciones, y = Residuos)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal()
+```
+
+En el gráfico, la **recta de regresión se aprecia constante**, en torno a 0, y **los residuos se agrupan en torno a una banda también relativamente constante**.
+
+### Supuesto de colinearidad
+
+En el gráfico original de la diagnosis, **prácticamente todas las observaciones están en la franja verde**. Tan solo tres están en la roja (es el mejor resultado que obtuvimos).
+
+### Supuesto de normalidad de los residuos
+
+En el gráfico, los **percentiles empíricos de los residuos se acoplan bastante bien a la diagonal**, excepto en los extremos. Comprobémoslo analíticamente con un **contraste de normalidad**:
+
+```{r}
+library(olsrr)
+ols_test_normality(adjustment$residuals)
+```
+
+Como se puede observar, los **p-valor** de los distintos test son iguales a **0**, por lo que, a un nivel de significación del 0.05, podemos **rechazar la hipótesis de normalidad**. Por tanto, **no podemos asumir a normalidad en nuestro modelo**. Se han hecho pruebas con cambios en la receta añadiendo distintas transformaciones a nuestra objetivo (`step_YeoJohnson()`, `step_BoxCox()`, `step_sqrt()`), pero **tampoco ha sido posible**.
+
+### Incorrelación de los residuos
+
+```{r}
+library(car)
+durbinWatsonTest(adjustment)
+```
+
+Como se puede observar, el **p-valor de la prueba Durbin-Watson** es igual a **0.772**, por lo que, a un nivel de significación del 0.05, **no** podemos **rechazar la hipótesis nula**, esto es, **la incorrelación de los residuos**.
+
+### Influencia de los residuos
+
+En el gráfico original de la diagnosis, **todas las observaciones parecen estar contenidas entre las líneas punteadas al 0.5**.
+
+# Fase 5.4: Evaluación del modelo (Regresión multivariante: modelo saturado)
+
+## Resumen
+
+```{r}
+glance(reg_fit_multi)
+```
+
+Nuestro $R^2$ es igual a **0.8786**, por lo que **el ratio de información explicada del modelo es del 88 %**. Este modelo **ha duplicado** el ratio de información explicada respecto del modelo univariante anterior.
+
+## Evaluación y predicciones en test
+
+```{r}
+# Hacemos el split. Lo hacemos del 0.6 ya que hay pocos datos en train. 
+set.seed(05492)
+
+split_house <- 
+  initial_split(house_train, prop = 0.6)
+
+# Predecimos en test
+reg_fit_multi <- 
+  reg_wflow_multi |> last_fit(split = split_house)
+
+# Evaluamos en test
+reg_fit_multi |>  collect_metrics()
+```
+
+## Visualización de errores en test
+
+```{r}
+set.seed(05492)
+
+# Errores en test
+pred_test <-
+  reg_fit_multi |>
+  collect_predictions() |>
+  mutate(error = SalePrice - .pred)
+pred_test
+```
+
+En esta tabla se puede observar cómo, en nuestro modelo, las **estimaciones se ajustan en gran medida** a los valores **reales** de la objetivo `SalePrice`. Visualizaremos ahora estos valores a través de un gráfico.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+g1 <- pred_test |> 
+  ggplot(mapping = aes(x = .pred, y = SalePrice)) +
+  geom_point(color = "#56BCC2", alpha = 0.6, size = 4) +
+  geom_abline(intercept = 0, slope = 1, color = "#EB9891", size = 1.2) +
+  theme_minimal() + 
+  labs(title = "Resultados de la regresión lineal multivariante (modelo saturado)",
+       subtitle = "Los valores predichos deberían estar cercanos a la diagonal",
+       x = "Predicciones",
+       y = "Valores reales")
+
+g2 <- pred_test |> 
+  select(.pred, SalePrice) |> 
+  gather(Distribución, value) |> 
+  ggplot(aes(x = value, color = Distribución, fill = Distribución)) + 
+  geom_density(alpha = 0.6) + 
+  theme_minimal() + 
+  labs(title = "Distribución de las predicciones sobre los valores reales de SalePrice",
+       x = "Distribuciones",
+       y = "Frecuencia")
+
+multiplot(g1, g2)
+```
+
+Como se puede apreciar en los gráficos, las **predicciones** son **bastante buenas**, bastante mejores que en el modelo univariante. A pesar de que se han incumplido algunos de los supuestos de regresión, la recta **se ajusta bastante bien a los datos**. A continuación, crearemos un modelo a caballo entre el univariante y el saturado, incluyendo únicamente en el modelo una **selección** del total de variables del dataset. 
+
+# Fase 4.5: Receta, Modelo y Flujo (Regresión multivariante con selección de modelos)
+
+Para este último modelo de regresión vamos a emplear únicamente un conjunto de **variables** seleccionadas a través de distintos **criterios de información**.
+
+## Seleccion de modelos 
+
+Para la selección de modelos, pasaremos directamente la receta a `lm()` para proceder a la regresión contra las variables escogidas.
+
+```{r}
+house_prep <- 
+  bake(house_rec_multi |> prep(), new_data = NULL)
+ajuste_house_ulti <- 
+  lm(data = house_prep , SalePrice ~ .)
+```
+
+En este caso, y tras varias pruebas, hemos decidido emplear el **criterio de información BIC**, por lo que le aplicaremos a la función `stepAIC` su **penalización** correspondiente:
+
+```{r}
+set.seed(05492)
+
+modBIC <-
+  MASS::stepAIC(ajuste_house_ulti , k = log(nrow(house_train)))
+```
+
+Resumimos el modelo tras su procesado con `summary()`:
+
+```{r}
+summary(modBIC)
+```
+
+Como se puede observar, **ha eliminado una gran cantidad de variables**. Pasamos ahora a reescribir la receta únicamente con las variables seleccionadas:
+
+## Receta para el método de regresión multivariante con selección de modelos
+
+#### Modificación previa de las variables según BIC
+
+```{r}
+house_bic <- 
+  house_train |> mutate(MSZoning = MSZoning == "RL")
+house_bic <- 
+  house_bic |> mutate(Neighborhood = Neighborhood == "X.200k" )
+house_bic <- 
+  house_bic |> mutate(BldgType = BldgType == "fmCon_Dup_Twnhs" )
+house_bic <- 
+  house_bic |> mutate(CentralAir = CentralAir == "Y")
+house_bic <- 
+  house_bic |> mutate(Functional = Functional == "Typ")
+house_bic <- 
+  house_bic |> mutate(PavedDrive = PavedDrive == "Y")
+house_bic <- 
+  house_bic |> mutate(SaleCondition = SaleCondition == "Normal")
+```
+
+#### Aplicación de roles
+
+Volvemos a **definir una nueva receta** indicándole el conjunto donde tenemos validación y train, y enfrentando nuestra variable objetivo `SalePrice` a las variables seleccionadas por `step_AIC()`. Después, **asignamos posibles roles**, sujetos a modificación, que nos permitan diferenciar acciones entre las variables (sobre todo en la sección outliers).
+
+```{r}
+# Receta
+house_rec_multi_bic <-
+  # Fórmula y datos
+  recipe(data = house_bic, SalePrice ~ LotArea + OverallCond + BsmtQual + 
+           HeatingQC + `2ndFlrSF` + GrLivArea + FireplaceQu + GarageCars + 
+           GarageQual + RemodAdd + Age + MSZoning + Neighborhood + BldgType + 
+           CentralAir + Functional + PavedDrive + SaleCondition)|>
+  # Roles
+  add_role(where(is.factor), 
+           new_role = "cualitativa") |> 
+  add_role(where(is.numeric), 
+           new_role = "cuantitativa") |> 
+  add_role(LotArea, `2ndFlrSF`, 
+           new_role = "mediana") |> 
+  add_role(all_nominal_predictors(), 
+           new_role = "moda") |> 
+  add_role(OverallCond,
+           new_role = "imputar media")
+```
+
+#### Reagrupación de las variables cualitativas
+
+En este modelo **no será necesario reagrupar**. El **criterio de información BIC** ya ha seleccionado las categorías más apropiadas, si las hubiera, de cada variable.
+
+#### Recategorización de las variables cuantitativas
+
+En los métodos de regresión, la **recategorización** de las variables **cuantitativas no** es estrictamente **necesaria**. Por tanto, en este receta, del total de variables cuantitativas no vamos a modificar ninguna.
+
+#### Outliers
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+multiplot(box1, box2, box3, box4, box5, box6, box7, box8, box9, box10, cols = 2) 
+multiplot(box11, box12, box13, box14, box15, box16, box17, cols = 2)
+```
+
+Si observamos estos gráficos de cajas y bigotes, todas nuestras variables **cuantitativas continuas** son **asimétricas**, por lo que se detectarán los outliers y se imputarán los ausentes por la **mediana**. Para el caso de las **semi-cuantitativas** (`KitchenQual`, por ejemplo) se imputarán directamente los ausentes por uno de los dos métodos en función de la simetría o asimetría de la variable. Para el resto de variables **cualitativas**, **imputamos** directamente por la **moda**.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |> 
+  # Detección de outliers por la mediana y por la media
+  step_mutate(across(has_role("mediana"), function(x) { ifelse(abs(scores(x, type = "mad")) > 3 & !is.na(x), NA, x) })) |>
+  # Imputación de ausentes por la mediana, la media y la moda
+  step_impute_median(has_role("mediana")) |>
+  step_impute_mean(has_role("imputar_media")) |>
+  step_impute_mode(has_role("moda")) |> 
+  step_impute_knn(all_numeric_predictors() , -has_role("mediana"), -has_role("imputar_media") )
+```
+
+#### YeoJohnson para la normalidad de los residuos
+
+A fin de que nuestro modelo cumpla los **test de normalidad de los residuos**, vamos a incluir en la receta la función `step_YeoJohnson`, que se emplea para **eliminar la asimetría en los datos numéricos** del modelo.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |> 
+  step_YeoJohnson(all_numeric_predictors())
+```
+
+#### Transformación logarítmica de algunas variables
+
+Transformamos algunas variables a **logarítmicas** para mejorar su relación.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |> 
+  step_log(SalePrice, offset = 1) 
+```
+
+#### Normalizar por rango
+
+**Normalizamos** nuestras variables por rango para que todas tengan **el mismo peso**, **entre 0 y 1**.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |> 
+  step_normalize(all_numeric_predictors()) 
+```
+
+#### Variables dummy
+
+Como esta receta es para un modelo de regresión multivariante, debemos **dummyficar** nuestras variables cualitativas.
+Para ello, tomamos **todas las nominales, menos nuestra variable objetivo**.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |>
+  step_dummy(all_nominal(), -all_outcomes())
+```
+
+#### Filtro de cero varianza
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |>
+  step_zv(all_predictors())
+```
+
+#### Filtro de correlación
+
+Aplicamos el **filtro de correlación** a nuestras variables **numéricas**.
+
+```{r}
+house_rec_multi_bic <-
+  house_rec_multi_bic |> 
+  step_corr(all_numeric_predictors(), threshold = 0.6)
+```
+
+#### Horneado
+
+Por último, **horneamos** nuestra receta para comprobar que todas nuestras **nuevas variables** recategorizadas se hayan creado **correctamente**.
+
+```{r}
+bake(house_rec_multi_bic |>  prep(), new_data = NULL)
+```
+
+## Flujo y ajuste
+
+```{r}
+# Creación del flujo
+reg_wflow_bic <-
+  workflow() |> 
+  add_model(reg_lineal) |> 
+  add_recipe(house_rec_multi_bic)
+```
+
+```{r}
+set.seed(05492)
+
+reg_fit_bic <-
+  reg_wflow_bic |> fit(data = house_train)
+reg_fit_bic 
+```
+ 
+```{r}
+# Resumen del ajuste
+tidy(reg_fit_bic)
+```
+
+### Índices performáticos del modelo
+
+```{r}
+reg_fit_bic |> extract_fit_engine() |>  performance()
+```
+
+
+Nuestro $R^2$ es igual a **0.888**, por lo que **el ratio de información explicada del modelo es del 89 %**. Este modelo **es superior** al ratio de información explicada con el modelo multivariante anterior.
+
+## Diagnosis
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+check_model(reg_fit_bic |> extract_fit_engine())
+```
+
+### Supuesto de linealidad
+
+En el gráfico, la **línea es bastante atendencial**, se ve bastante **monótona** en todo su recorrido (excepto en sus extremos). Comprobémoslo analíticamente con un **ANOVA entre residuos y predictora**:
+
+```{r}
+adjustment <- 
+  reg_fit_bic |>  extract_fit_engine()
+lm(adjustment$residuals ~ adjustment$fitted.values) |>  anova()
+lm(adjustment$residuals ~ I(adjustment$fitted.values^2) + adjustment$fitted.values) |>  anova()
+```
+
+Como se puede observar, el **p-valor de la prueba F de Fisher-Snedecor** es igual a **1**, por lo que, a un nivel de significación del 0.05, **no** podemos **rechazar la hipótesis nula**, esto es, **la no existencia de una relación lineal entre las predictoras y sus residuos**. Por tanto, ello implica que **no parece existir tendencia lineal entre residuos y predictoras** en nuestro modelo. Lo mismo ocurre en el segundo caso: **tampoco parece existir tendencia cuadrática entre residuos y predictoras**.
+
+### Supuesto de homocedasticidad
+
+En el gráfico, la **línea sigue una fase decreciente al principio y creciente al final**, se ve poco **monótona** en todo su recorrido. Comprobémoslo analíticamente con un **test de heterocedasticidad**:
+
+```{r}
+check_heteroscedasticity(adjustment)
+```
+
+Según el test de heterocedasticidad, **el supuesto de homocedasticidad no se cumple para nuestro modelo**. Esto, muy a menudo, resulta poco realista, pues el supuesto implica que la variabilidad del error de la variable objetivo es la misma para cualquier nivel de nuestra predictora.
+
+```{r}
+ggplot(
+  tibble("Observaciones" = 1:length(adjustment$residuals),
+         "Residuos" = adjustment$residuals),
+  aes(x = Observaciones, y = Residuos)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal()
+```
+
+En el gráfico, la **recta de regresión se aprecia constante**, en torno a 0, y **los residuos se agrupan en torno a una banda también relativamente constante**.
+
+### Supuesto de colinearidad
+
+En el gráfico original de la diagnosis, **prácticamente todas las observaciones están en la franja verde**. Ninguna está en la franja roja.
+
+### Supuesto de normalidad de los residuos
+
+En el gráfico, los **percentiles empíricos de los residuos se acoplan bastante bien a la diagonal**, excepto en los extremos. Comprobémoslo analíticamente con un **contraste de normalidad**:
+
+```{r}
+library(olsrr)
+ols_test_normality(adjustment$residuals)
+```
+
+Como se puede observar, los **p-valor** de los distintos test son iguales a **0**, por lo que, a un nivel de significación del 0.05, podemos **rechazar la hipótesis de normalidad**. Por tanto, **no podemos asumir a normalidad en nuestro modelo**. Se han hecho pruebas con cambios en la receta añadiendo distintas transformaciones a nuestra objetivo (`step_YeoJohnson()`, `step_BoxCox()`, `step_sqrt()`), pero **tampoco ha sido posible**.
+
+### Influencia de los residuos
+
+En el gráfico original de la diagnosis, **todas las observaciones parecen estar contenidas entre las líneas punteadas al 0.5**.
+
+# Fase 5.5: Evaluación del modelo (Regresión multivariante con selección de modelos)
+
+## Resumen
+
+```{r}
+glance(reg_fit_bic)
+```
+
+Nuestro $R^2$ es igual a **0.8884**, por lo que **el ratio de información explicada del modelo es del 89 %**.
+
+## Evaluación y predicciones en test
+
+```{r}
+# Hacemos el split. Lo hacemos del 0.6 ya que hay pocos datos en train. 
+set.seed(05492)
+
+split_house <- 
+  initial_split(house_train, prop = 0.6)
+
+# Predecimos en test
+reg_fit_bic_test <- 
+  reg_fit_bic |> last_fit(split = split_house)
+
+# Evaluamos en test
+reg_fit_bic_test |>  collect_metrics()
+```
+
+## Visualización de errores en test
+
+```{r}
+set.seed(05492)
+
+# Errores en test
+pred_test <-
+  reg_fit_bic_test |>
+  collect_predictions() |>
+  mutate(error = SalePrice - .pred)
+pred_test
+```
+
+En esta tabla se puede observar cómo, en nuestro modelo, las **estimaciones se ajustan en gran medida** a los valores **reales** de la objetivo `SalePrice`. Visualizaremos ahora estos valores a través de un gráfico.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+g1 <- pred_test |> 
+  ggplot(mapping = aes(x = .pred, y = SalePrice)) +
+  geom_point(color = "#56BCC2", alpha = 0.6, size = 4) +
+  geom_abline(intercept = 0, slope = 1, color = "#EB9891", size = 1.2) +
+  theme_minimal() + 
+  labs(title = "Resultados de la regresión lineal multivariante con selección de modelos",
+       subtitle = "Los valores predichos deberían estar cercanos a la diagonal",
+       x = "Predicciones",
+       y = "Valores reales")
+
+g2 <- pred_test |> 
+  select(.pred, SalePrice) |> 
+  gather(Distribución, value) |> 
+  ggplot(aes(x = value, color = Distribución, fill = Distribución)) + 
+  geom_density(alpha = 0.6) + 
+  theme_minimal() + 
+  labs(title = "Distribución de las predicciones sobre los valores reales de SalePrice",
+       x = "Distribuciones",
+       y = "Frecuencia")
+
+multiplot(g1, g2)
+```
+
+Como se puede apreciar en los gráficos, las **predicciones** son **bastante buenas**, bastante mejores que en los anteriores modelos. A pesar de que se han incumplido algunos de los supuestos de regresión, la recta **se ajusta bastante bien a los datos**.
+
+# Comparación final de todos los modelos de regresión
+
+Compararemos ahora los tres modelos de regresión: el **modelo univariante**, el **modelo multivariante saturado** y el **modelo multivariante con selección de modelos**.
+
+```{r}
+compare_performance(reg_fit_uni |> extract_fit_engine(),
+                    reg_fit_multi |> extract_fit_engine(),
+                    reg_fit_bic_test |> extract_fit_engine())
+```
+Como se puede observar, el mejor modelo es la **regresión multivariante con selección de modelos**. Presenta un $R^2$ del 0.902 y un $RMSE$ bastante bajo.
+
+## Predicción para el mejor modelo: regresión multivariante con selección de modelos
+
+Nos quedamos finalmente con la **regresión multivariante con selección de modelos** (nos salió un 0.14492 de **score** :D).
+
+```{r eval = FALSE}
+# Predicciones
+pred_bic <-
+  predict(reg_fit_bic, house_test)
+summary(pred_bic)
+
+# Visualización de las predicciones para cada `Id`
+final_pred <- 
+  data.frame(Id = c(1461:2919), pred_bic) |> 
+  dplyr::rename(SalePrice = .pred) |> 
+  mutate(exp(SalePrice))
+head(final_pred)
+
+# Exportamos nuestro dataframe para subirlo a Kaggle
+write.csv(final_pred, file = 'house_entrega_bic.csv', row.names = FALSE)
+```
